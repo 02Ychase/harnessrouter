@@ -1270,6 +1270,48 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     # system-one-phase2) on its own GPU behind TypeSafe's wire, so a HarnessRouter key drives the
     # systemone base too: decisions at <base>/systemone, billed to the key's credits (2026-09-24).
     ("harnessrouter", "systemone"): "typesafe",
+    # ── this batch ────────────────────────────────────────────────────────────────────────────
+    # mimo is an opencode FORK that kept opencode's provider model (an ai-sdk package name plus a
+    # baseURL), so it reaches what opencode reaches and is wired row for row with it. No new
+    # provider entry anywhere: these are wiring rows pointing at providers that already exist,
+    # which is checklist item 1 — a second _PROVIDER_CATALOG key of the same name would silently
+    # overwrite the first on a rebase.
+    ("anthropic", "mimo"): "anthropic",        ("openai", "mimo"): "openai",
+    ("azure-foundry", "mimo"): "azure",
+    ("openrouter", "mimo"): "openai-api",
+    ("tokenrouter", "mimo"): "tokenrouter",    ("vercel", "mimo"): "tokenrouter",
+    ("llmtr", "mimo"): "tokenrouter",          ("custom", "mimo"): "tokenrouter",
+    ("google", "mimo"): "openai-api",          ("harnessrouter", "mimo"): "tokenrouter",
+    # gajae is pi's lineage and its models.yml takes pi's own `api` values, so it is wired as pi is.
+    ("anthropic", "gajae"): "anthropic",       ("openai", "gajae"): "openai",
+    ("azure-foundry", "gajae"): "azure",
+    ("openrouter", "gajae"): "openrouter",
+    ("tokenrouter", "gajae"): "tokenrouter",   ("vercel", "gajae"): "tokenrouter",
+    ("llmtr", "gajae"): "tokenrouter",         ("custom", "gajae"): "tokenrouter",
+    ("google", "gajae"): "openai-api",         ("harnessrouter", "gajae"): "tokenrouter",
+    # jcode, opensquilla and nanobot each speak ONE OpenAI shape, chat/completions, through the
+    # loopback relay, which is exactly cline's and goose's reach, so they are wired as those are.
+    # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
+    # that IS Anthropic — a claude id on an aggregator stays on the relay so its served model
+    # remains readable (see _build_jcode).
+    ("anthropic", "jcode"): "anthropic",       ("openai", "jcode"): "openai",
+    ("azure-foundry", "jcode"): "azure",
+    ("openrouter", "jcode"): "openai-api",
+    ("tokenrouter", "jcode"): "tokenrouter",   ("vercel", "jcode"): "tokenrouter",
+    ("llmtr", "jcode"): "tokenrouter",         ("custom", "jcode"): "openai-api",
+    ("google", "jcode"): "openai-api",         ("harnessrouter", "jcode"): "tokenrouter",
+    ("anthropic", "opensquilla"): "anthropic", ("openai", "opensquilla"): "openai",
+    ("azure-foundry", "opensquilla"): "azure",
+    ("openrouter", "opensquilla"): "openai-api",
+    ("tokenrouter", "opensquilla"): "tokenrouter", ("vercel", "opensquilla"): "tokenrouter",
+    ("llmtr", "opensquilla"): "tokenrouter",   ("custom", "opensquilla"): "openai-api",
+    ("google", "opensquilla"): "openai-api",   ("harnessrouter", "opensquilla"): "tokenrouter",
+    ("anthropic", "nanobot"): "anthropic",     ("openai", "nanobot"): "openai",
+    ("azure-foundry", "nanobot"): "azure",
+    ("openrouter", "nanobot"): "openai-api",
+    ("tokenrouter", "nanobot"): "tokenrouter", ("vercel", "nanobot"): "tokenrouter",
+    ("llmtr", "nanobot"): "tokenrouter",       ("custom", "nanobot"): "openai-api",
+    ("google", "nanobot"): "openai-api",       ("harnessrouter", "nanobot"): "tokenrouter",
 }
 
 
@@ -4962,9 +5004,16 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
+    # This batch: all five drive a custom OpenAI endpoint. mimo and gajae also take a custom
+    # ANTHROPIC endpoint (mimo through @ai-sdk/anthropic, gajae through its models.yml
+    # `anthropic-messages` api), which is why those two are in both sets; jcode's and
+    # opensquilla's Messages providers exist but are reserved for a connection that IS Anthropic,
+    # so a custom integration declaring the anthropic format would be offered a path the runner
+    # does not take for it — unlisted rather than nearly true.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "cheetahclaws"},
-    "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands"},
+               "openhands", "cheetahclaws", "mimo", "gajae", "jcode", "opensquilla", "nanobot"},
+    "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands",
+                  "mimo", "gajae"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -6711,6 +6760,24 @@ _MODEL_CATALOG: dict[str, dict] = {
                          "deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-27b", "qwen3.7-plus", "hunyuan-4-preview", "nemotron-3.5-lightning", "nemotron-3-super", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20", "grok-build-0.1", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-glimmer-30b", "llama-4-maverick", "llama-3.3-70b"]},
 }
 _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's reach, see the omp entry
+# This batch's five, each taking the list of the base whose WIRE REACH it shares, and each OFFERED
+# BUT NOT YET MEASURED — no support-matrix column has run on any of them. The precedent for saying
+# so at the ids rather than under a heading that claims measurement is the cheetahclaws entry, and
+# the reason is checklist item 13: a comment that outlives what it describes is a defect here.
+#
+# mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
+# and a baseURL, so it reaches what opencode reaches, Responses ids included.
+_MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
+# gajae is pi's lineage and its models.yml takes pi's own `api` values (openai-completions,
+# openai-responses, anthropic-messages), so it reaches what pi reaches.
+_MODEL_CATALOG["gajae"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["pi"]["models"])}
+# jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
+# loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
+# CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
+# only for a connection that IS Anthropic; the runner keeps a claude id on an aggregator on the
+# relay so its served model stays readable — see _build_jcode.)
+for _b in ("jcode", "opensquilla", "nanobot"):
+    _MODEL_CATALOG[_b] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["kimi"]["models"])}
 # systemone: Jev's ids across its two providers. `jev-latest` is served by both (TypeSafe's own API,
 # and OpenRouter's rolling alias of the same model) and is the default, so a harness made on either
 # connection runs; `jev-preview` is TypeSafe's alone and `jev-1.13` OpenRouter's alone (jev-1.13
@@ -6745,7 +6812,14 @@ RESPONSES_ONLY_MODELS = frozenset({"gpt-5.3-codex", "gpt-6-astra"})
 # id sent `openai/<id>`; openhands under litellm's proxy provider, the id sent as it is), so a
 # Responses-API-only id would be a picker row that fails on send.
 # cheetahclaws speaks chat/completions only (its `custom/` provider is OpenAI Chat Completions).
-CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws")
+# jcode's openai-compatible provider posts to /chat/completions (its own error names the endpoint),
+# opensquilla's generic `custom` provider is its Chat Completions adapter, and nanobot's `custom`
+# provider is the same — its `apiType` field, the one that would select a Responses surface, is
+# refused on any provider but `openai` ("providers.<name>.api_type is only supported for
+# providers.openai", which rejects the whole config). So a Responses-API-only id on any of the three
+# would be a picker row that fails on send.
+CHAT_ONLY_BACKENDS = ("qwen", "cline", "goose", "kimi", "aider", "openhands", "cheetahclaws",
+                      "jcode", "opensquilla", "nanobot")
 _BARE_MODELS = {"", "claude", "codex", "anthropic", "bedrock", "openai", "hermes", "pi", "dsh", "deepseek", "omp"}
 # Models whose serving CHANNEL refuses image input outright. Measured, not assumed — probed
 # 2026-08-19 on the TokenRouter connection with a data-URI image in a user message:
@@ -15403,6 +15477,127 @@ _BASE_CATALOG: dict[str, dict] = {
                   ("fetch_web_content", "Web Fetch"), ("ask_question", "Question"),
                   ("spawn_agent", "Subagent")],
         "tool_enforcement": "instruction",
+    },
+    "mimo": {
+        "label": "MiMo Code", "backend": "mimo", "status": "ready",
+        "system_prompt": ("You are MiMo Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The PERMISSION keys the fork kept from opencode (config/permission.ts), because those are
+        # the names that can actually be denied — a key outside this set is accepted by the
+        # record-with-rest schema and then matches no tool, which is a switch the console shows and
+        # that disables nothing.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("edit", "Edit"), ("glob", "Glob"),
+                  ("grep", "Search"), ("list", "List"), ("webfetch", "Web Fetch"),
+                  ("websearch", "Web Search"), ("todowrite", "Todo"), ("task", "Subagent"),
+                  ("question", "Question"), ("lsp", "LSP"), ("skill", "Skill"),
+                  ("external_directory", "External Directory")],
+        # "hard" for opencode's reason, which the fork did not change: a `permission.<key>: "deny"`
+        # removes the tool rather than discouraging it. The honest limit every shell-bearing base
+        # has: denying `edit` does not stop a file being written through `bash`.
+        "tool_enforcement": "hard",
+    },
+    "gajae": {
+        "label": "Gajae-Code", "backend": "gajae", "status": "ready",
+        "system_prompt": ("You are Gajae-Code, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # Read off the pinned 0.18.5's own tools/descriptors.ts `names` table and NOT off `--help`,
+        # whose list is stale (it advertises a `notebook` tool this build does not register). Pinned
+        # equal to the runner's ALL_GAJAE_TOOLS by gateway/tests/test_catalog_batch3_tools.py, so a
+        # toggle the console shows always names a tool the model was really offered. `computer` is
+        # macOS-arm64 only and is therefore not listed; the three hidden ids (yield,
+        # report_finding, resolve) are the CLI's own plumbing and are not offered either.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("search", "Search"), ("find", "Find"), ("lsp", "LSP"),
+                  ("python", "Python"), ("eval", "Eval"), ("calc", "Calc"), ("ssh", "SSH"),
+                  ("github", "GitHub"), ("browser", "Browser"), ("ast_grep", "AST Search"),
+                  ("ast_edit", "AST Edit"), ("render_mermaid", "Render Mermaid"),
+                  ("debug", "Debug"), ("bisect", "Bisect"), ("checkpoint", "Checkpoint"),
+                  ("rewind", "Rewind"), ("task", "Subagent"), ("subagent", "Subagent Manage"),
+                  ("job", "Background Job"), ("monitor", "Monitor"), ("cron", "Cron"),
+                  ("recipe", "Recipe"), ("irc", "Agent Message"), ("todo_write", "Todo"),
+                  ("web_search", "Web Search"), ("telegram_send", "Telegram Send"),
+                  ("skill", "Skill"), ("skill_discovery", "Skill Discovery"),
+                  ("search_tool_bm25", "Tool Search"), ("goal", "Goal"), ("ask", "Question"),
+                  ("move_session", "Move Session")],
+        # "hard", and measured: --tools is an allowlist the CLI applies before the schema is built,
+        # and with `write` left out of it the model's own account of its tools came back without it.
+        # Unlike omp, an unknown name cannot kill the turn — cli/args.ts warns and drops it.
+        "tool_enforcement": "hard",
+    },
+    "jcode": {
+        "label": "jcode", "backend": "jcode", "status": "ready",
+        "system_prompt": ("You are jcode, an autonomous coding agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # Measured on the pinned v0.90.0 by asking the model for its own tool list, which is the
+        # list the schema was built from; pinned equal to the runner's ALL_JCODE_TOOLS.
+        # macos_computer_use is listed because the build registers it — on Linux it has nothing to
+        # drive, which is a property of the host, not of the catalog.
+        "tools": [("bash", "Shell"), ("read", "File Read"), ("write", "File Write"),
+                  ("edit", "Edit"), ("replace", "Replace"), ("apply_patch", "Apply Patch"),
+                  ("ls", "List"), ("agentgrep", "Search"), ("open", "Open"),
+                  ("webfetch", "Web Fetch"), ("websearch", "Web Search"), ("browser", "Browser"),
+                  ("todo", "Todo"), ("memory", "Memory"), ("batch", "Batch"), ("bg", "Background"),
+                  ("swarm", "Swarm"), ("applet", "Applet"), ("panel", "Panel"),
+                  ("side_panel", "Side Panel"), ("schedule", "Schedule"),
+                  ("skill_manage", "Skill Manage"), ("jcode_docs", "Docs"),
+                  ("conversation_search", "Conversation Search"),
+                  ("session_search", "Session Search"), ("compile_remote", "Remote Compile"),
+                  ("integration_tools", "Integrations"), ("gmail", "Gmail"),
+                  ("maintainer_feedback", "Maintainer Feedback"),
+                  ("macos_computer_use", "Computer Use"), ("mcp", "MCP"),
+                  ("mcp_call", "MCP Call"), ("mcp_search", "MCP Search"), ("invalid", "Invalid")],
+        # "hard", and measured: --disabled-tools runs after the tool profile, and with `write`
+        # disabled the model's own list came back without it. Writing has four doors here (write,
+        # edit, replace, apply_patch) and egress several, so disabling one is not disabling a
+        # capability — the same honest limit every shell-bearing base carries.
+        "tool_enforcement": "hard",
+    },
+    "opensquilla": {
+        "label": "OpenSquilla", "backend": "opensquilla", "status": "ready",
+        "system_prompt": ("You are OpenSquilla, an autonomous agent. You work on a real git "
+                          "workspace with shell and file access, reading and editing files and "
+                          "running commands to complete the task end to end."),
+        # The tool names its own turns record (measured: write_file, read_file). Its agent CLI has
+        # NO per-tool deny list — `--permissions` chooses a posture (restricted / bypass / full) —
+        # so this list is deliberately short: it names what a turn was seen to call rather than
+        # advertising a switch for every tool in the runtime when none of them can be withheld.
+        "tools": [("exec", "Shell"), ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("list_dir", "List"), ("grep", "Search"),
+                  ("web_search", "Web Search"), ("web_fetch", "Web Fetch")],
+        # "instruction", and for a stated reason rather than for lack of looking: there is no deny
+        # list on `opensquilla agent`, so the disabled set reaches the model as a line in AGENTS.md
+        # (runner/server.py adds this base to the set that gets that instruction). UHP §4.3 forbids
+        # overstating this as much as understating it.
+        "tool_enforcement": "instruction",
+    },
+    "nanobot": {
+        "label": "nanobot", "backend": "nanobot", "status": "ready",
+        "system_prompt": ("You are nanobot, an autonomous agent. You work on a real git workspace "
+                          "with shell and file access, reading and editing files and running "
+                          "commands to complete the task end to end."),
+        # The 22 tools its loop registers, read off its own start-up line on 0.3.5 and pinned equal
+        # to the runner's ALL_NANOBOT_TOOLS.
+        "tools": [("exec", "Shell"), ("exec_session", "Shell Session"),
+                  ("list_exec_sessions", "Shell Sessions"), ("run_cli_app", "CLI App"),
+                  ("read_file", "File Read"), ("write_file", "File Write"),
+                  ("edit_file", "Edit"), ("apply_patch", "Apply Patch"),
+                  ("find_files", "Find"), ("grep", "Search"), ("list_dir", "List"),
+                  ("web_fetch", "Web Fetch"), ("web_search", "Web Search"),
+                  ("message", "Message"), ("my", "Self"), ("spawn", "Subagent"),
+                  ("create_goal", "Goal Create"), ("update_goal", "Goal Update"),
+                  ("list_sessions", "Sessions"), ("read_session", "Session Read"),
+                  ("search_sessions", "Session Search"),
+                  ("send_session_message", "Session Message")],
+        # "hard", and measured at the door that covers BOTH tool sources: the driver sets the
+        # SESSION's disabled_tools, which the loop applies to the registry it is about to use —
+        # after the MCP provider has registered its own tools into it. A registry filtered at
+        # construction would have withheld the built-ins and let every MCP tool through. Measured:
+        # with write_file withheld the model wrote the file with `exec` instead, which is the honest
+        # limit — withholding a tool withholds that tool, not the capability.
+        "tool_enforcement": "hard",
     },
 }
 

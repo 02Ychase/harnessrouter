@@ -1,0 +1,600 @@
+"""The five bases added together: mimo, gajae, jcode, opensquilla, nanobot.
+
+Everything asserted here was MEASURED against the pinned build named beside it, on 2026-10-02, not
+read off documentation. Each test pins one thing that would otherwise fail SILENTLY — the class of
+defect the last three harness PRs were taken over for:
+
+  * a shared helper reused for a fork whose spelling differs by one flag (mimo)
+  * a normaliser that treats a provider failure as an answer (gajae's agent_failed)
+  * usage read from the field the CLI offers rather than the one that is true (jcode's done.usage,
+    which holds only the LAST request's numbers)
+  * a default that substitutes the model (opensquilla's router) or that cannot fit the prompt
+    (its 8k assumption for a generic endpoint)
+  * a tool policy applied at one tool source and not the other (nanobot's session policy)
+
+Pinned builds: @mimo-ai/cli 0.1.15 · gjc 0.18.5 · jcode v0.90.0 · opensquilla 0.5.6 · nanobot-ai 0.3.5
+"""
+import json
+import pathlib
+import sys
+import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
+                    Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path, _build_gajae,
+                    _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
+                    _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
+                    _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
+                    _opensquilla_usage, _resume_lost, _write_skills)
+
+UP = "https://up.example/v1"
+
+
+def _ws():
+    d = tempfile.mkdtemp()
+    (pathlib.Path(d) / ".harness" / "home").mkdir(parents=True)
+    return d
+
+
+def _norm(fn, lines, model="gpt-5.4", cwd=""):
+    state: dict = {"model": model, "final": "", "cwd": cwd}
+    out = []
+    for ln in lines:
+        out += fn(ln, state)
+    return out, state
+
+
+# ── registration: the five places a missing row fails silently ────────────────────────────────
+
+def test_every_base_is_registered():
+    for b in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+        assert b in BACKENDS, b
+        assert BACKENDS[b]["providers"], b
+        assert BACKENDS[b]["default_model"], b
+        assert BACKENDS[b]["normalize"] is not None, b
+
+
+def test_all_five_read_agents_md():
+    # Measured per CLI (see _agent_doc_path's comment). Getting this wrong writes the file and the
+    # agent never sees it, so the workspace contract never arrives and nothing says so.
+    for b in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+        assert _agent_doc_path("/w", b).name == "AGENTS.md", b
+
+
+def test_skills_land_where_each_loader_looks():
+    want = {
+        "mimo": ".harness/skills",                        # named in mimo.json's skills.paths
+        "gajae": ".harness/home/.gjc/agent/skills",        # gjc's canonical user root
+        "jcode": ".harness/home/.jcode/skills",            # jcode's global root
+        "opensquilla": ".harness/opensquilla/skills",      # its managed root = $OPENSQUILLA_STATE_DIR/skills
+        "nanobot": "workspace/skills",                     # the ONE path its loader reads, inside
+                                                           # the nested workspace (see _NANOBOT_WS)
+    }
+    for backend, rel in want.items():
+        d = _ws()
+        _write_skills(d, [{"name": "demo", "content": "# demo"}], backend=backend)
+        assert (pathlib.Path(d) / rel / "demo" / "SKILL.md").is_file(), backend
+
+
+# ── mimo: an opencode fork, and every difference is a parameter rather than a copy ────────────
+
+def test_mimo_argv_is_opencodes_with_its_own_spellings():
+    d, env = _ws(), {}
+    cmd = _build_mimo("openai-api", Auth(api_key="sk-t", base_url=UP), "gpt-5.4", "do it", d, env)
+    assert cmd[0] == "mimo" and cmd[1] == "run"
+    assert "--format" in cmd and cmd[cmd.index("--format") + 1] == "json"
+    # Nothing runs unattended without this: measured, the turn stops at the first write.
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--pure" in cmd and "--thinking" in cmd
+    # NOT opencode's --auto / --session: the fork renamed both.
+    assert "--auto" not in cmd
+    assert cmd[-1] == "do it"
+    # Its own config env var and file name, so two backends in one workspace cannot collide.
+    assert env["MIMOCODE_CONFIG"].endswith("/.harness/mimo.json")
+    assert (pathlib.Path(d) / ".harness" / "mimo.json").is_file()
+    assert not (pathlib.Path(d) / ".harness" / "opencode.json").exists()
+
+
+def test_mimo_config_is_the_opencode_schema_with_the_key_named_not_written():
+    d, env = _ws(), {}
+    # deepseek-v4-pro rather than a gpt-5.x id: the fork kept _opencode_npm's per-model split, and
+    # a gpt-5.x id would correctly pick @ai-sdk/openai (the Responses package) instead.
+    _build_mimo("openai-api", Auth(api_key="sk-secret", base_url=UP), "deepseek-v4-pro", "hi", d, env,
+                tools_disabled=["bash (Shell)"])
+    cfg = json.loads((pathlib.Path(d) / ".harness" / "mimo.json").read_text())
+    assert cfg["provider"]["hr"]["npm"] == "@ai-sdk/openai-compatible"
+    assert cfg["provider"]["hr"]["options"]["apiKey"] == "{env:HR_MIMO_KEY}"
+    # The real key never reaches the CLI at all: every OpenAI-shape turn rides the loopback relay,
+    # so what the config names and what the environment carries is a per-turn PLACEHOLDER.
+    assert "sk-secret" not in json.dumps(cfg)
+    assert env["HR_MIMO_KEY"].startswith("hr-relay-") and env["HR_MIMO_KEY"] != "sk-secret"
+    assert cfg["permission"] == {"bash": "deny"}
+    # opencode's snapshot repo is a git repo of the workspace under $HOME; left on it reached
+    # 699 MB in twenty turns (#193). The fork inherited it, so it is turned off here too.
+    assert cfg["snapshot"] is False
+
+
+def test_mimo_shares_opencodes_normaliser():
+    # The stream is opencode's line for line, measured: {type,timestamp,sessionID,part}.
+    assert BACKENDS["mimo"]["normalize"] is _opencode_to_claude
+    evs, state = _norm(_opencode_to_claude, [
+        {"type": "step_start", "sessionID": "ses_x", "part": {"type": "step-start"}},
+        {"type": "text", "sessionID": "ses_x", "part": {"type": "text", "text": "OK"}},
+        {"type": "step_finish", "sessionID": "ses_x",
+         "part": {"type": "step-finish", "reason": "stop",
+                  "tokens": {"total": 14450, "input": 14413, "output": 7, "reasoning": 30,
+                             "cache": {"write": 0, "read": 0}}}},
+    ])
+    assert evs[0]["type"] == "system" and evs[0]["session_id"] == "ses_x"
+    assert state["final"] == "OK"
+
+
+def test_mimo_resume_is_not_claimed_for_a_session_this_workspace_does_not_hold():
+    # Its SQLite store is opencode's under another name, $HOME/.local/share/mimocode/mimocode.db.
+    # Naming a session it does not hold exits 1 before the first event, which would wedge every
+    # later turn in the conversation rather than one.
+    d = _ws()
+    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
+    cmd = _build_mimo("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                      resume_session_id="ses_gone")
+    assert "-s" not in cmd
+    assert _resume_lost("mimo", cmd, "ses_gone", d) == "ses_gone"
+    db = pathlib.Path(env["HOME"]) / ".local" / "share" / "mimocode"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "mimocode.db").write_bytes(b"...ses_here...")
+    cmd = _build_mimo("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                      resume_session_id="ses_here")
+    assert cmd[cmd.index("-s") + 1] == "ses_here"
+    assert _resume_lost("mimo", cmd, "ses_here", d) is None
+
+
+# ── gajae: pi's stream, pi's normaliser, and the one event pi has no branch for ────────────────
+
+def test_gajae_argv():
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "do it", d, env)
+    assert cmd[0] == "gjc" and "-p" in cmd
+    assert cmd[cmd.index("--mode") + 1] == "json"
+    # Fully qualified, because --model is a FUZZY pattern and a custom provider also gets
+    # auto-enabled /v1/models discovery: a bare family name among hundreds of discovered ids is a
+    # substitution waiting to happen.
+    assert cmd[cmd.index("--model") + 1] == "hr/gpt-5.4"
+    # Session storage AND lookup inside .harness/, so the transcript is checkpointed and is never
+    # handed back as a produced file.
+    assert cmd[cmd.index("--session-dir") + 1].endswith("/.harness/gajae-sessions")
+    # The conventional MCP autoload includes a file IN the workspace (.gjc/mcp.json) that a task
+    # could write and the next turn would execute — pi's --no-extensions hole, closed the same way.
+    assert "--no-mcp" in cmd
+    assert cmd[-1] == "do it"
+    # A signed model-preset registry fetched at start-up can rewrite which model a preset names.
+    assert env["GJC_MODEL_PRESET_REGISTRY_DISABLED"] == "1"
+
+
+def test_gajae_models_yml_names_the_key_rather_than_holding_it():
+    d = _ws()
+    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
+    # deepseek-v4-pro, not a gpt-5.x id: pi's own api split sends the gpt-5 line to
+    # openai-responses, which is correct and is asserted separately below.
+    _build_gajae("openai-api", Auth(api_key="sk-secret", base_url=UP), "deepseek-v4-pro", "hi", d, env)
+    mv = pathlib.Path(env["HOME"], ".gjc", "agent", "models.yml").read_text()
+    assert "sk-secret" not in mv
+    assert json.loads(mv)["providers"]["hr"]["apiKey"] == "HR_GAJAE_KEY"
+    assert json.loads(mv)["providers"]["hr"]["api"] == "openai-completions"
+    # What the variable holds is the relay's per-turn placeholder, never the provider key: the
+    # file is in the checkpointed workspace, and the real key stays in the runner process.
+    assert env["HR_GAJAE_KEY"].startswith("hr-relay-") and env["HR_GAJAE_KEY"] != "sk-secret"
+    # The gpt-5 line goes to the Responses api instead — pi's split, inherited.
+    d2 = _ws(); env2 = {"HOME": str(pathlib.Path(d2) / ".harness" / "home")}
+    _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d2, env2)
+    mv2 = json.loads(pathlib.Path(env2["HOME"], ".gjc", "agent", "models.yml").read_text())
+    assert mv2["providers"]["hr"]["api"] == "openai-responses"
+    # Excluded from the checkpoint anyway: a future build reading apiKey as a literal must not turn
+    # this file into a leak.
+    assert "./.harness/home/.gjc/agent/models.yml" in CHECKPOINT_EXCLUDE
+
+
+def test_gajae_tool_allowlist_is_the_full_set_minus_the_disabled_one():
+    d = _ws()
+    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
+    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                       tools_disabled=["write (File Write)"])
+    allow = next(a for a in cmd if a.startswith("--tools="))[len("--tools="):].split(",")
+    assert "write" not in allow
+    assert set(allow) == ALL_GAJAE_TOOLS - {"write"}
+    # A disable list naming nothing this runtime has is not a constraint, so nothing is sent — an
+    # allowlist that removes nothing would only risk narrowing the set by accident.
+    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                       tools_disabled=["WebSearch"])
+    assert not any(a.startswith("--tools") for a in cmd)
+
+
+def test_gajae_provider_failure_is_a_failed_turn_not_an_answer():
+    # MEASURED against the pinned binary with a bad key: the turn ends on an assistant message_end
+    # with stopReason "error" and the provider's sentence in errorMessage, and the CLI exits 1.
+    evs, state = _norm(_gajae_to_claude, [
+        {"type": "session", "id": "01a0", "version": 5},
+        {"type": "message_end", "message": {
+            "role": "assistant", "content": [], "model": "gpt-5.4", "stopReason": "error",
+            "errorStatus": 401, "errorMessage": "401 Authentication failed.",
+            "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}},
+        {"type": "agent_end", "messages": []},
+    ])
+    res = evs[-1]
+    assert res["type"] == "result" and res["is_error"] is True
+    assert "401 Authentication failed." in res["result"]
+
+
+def test_gajae_agent_failed_is_the_reason_and_never_the_answer():
+    # print-mode.ts writes this when the terminal disposition is a failure no message_end reported.
+    # pi's normaliser has no branch for it, so without this one the turn would complete with
+    # whatever text came before as its answer.
+    evs, state = _norm(_gajae_to_claude, [
+        {"type": "session", "id": "01a0"},
+        {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "let me look"}},
+        {"type": "agent_failed", "error": {"code": "empty_turn", "message": "the model returned nothing"}},
+        {"type": "agent_end", "messages": []},
+    ])
+    res = evs[-1]
+    assert res["is_error"] is True
+    assert res["result"] == "the model returned nothing"
+
+
+def test_gajae_answer_that_merely_mentions_an_error_still_passes():
+    # The anchored-match rule: a coding agent writes about errors constantly, and an unanchored
+    # match turns real answers into failures (the goose lesson). Nothing here sets the error state.
+    evs, _ = _norm(_gajae_to_claude, [
+        {"type": "session", "id": "01a0"},
+        {"type": "message_end", "message": {
+            "role": "assistant", "model": "gpt-5.4", "stopReason": "stop",
+            "content": [{"type": "text", "text": "I fixed the error in parse(): it threw on empty input."}],
+            "usage": {"input": 10, "output": 5}}},
+        {"type": "agent_end", "messages": []},
+    ])
+    assert evs[-1]["is_error"] is False
+    assert "I fixed the error" in evs[-1]["result"]
+
+
+def test_gajae_resume_only_when_the_session_file_is_here():
+    d = _ws()
+    env = {"HOME": str(pathlib.Path(d) / ".harness" / "home")}
+    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                       resume_session_id="01a0-gone")
+    assert "-r" not in cmd and _resume_lost("gajae", cmd, "01a0-gone", d) == "01a0-gone"
+    sd = pathlib.Path(d, ".harness", "gajae-sessions")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "2026-10-02T22-43-45-033Z_01a0-here.jsonl").write_text("{}")
+    cmd = _build_gajae("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                       resume_session_id="01a0-here")
+    assert cmd[cmd.index("-r") + 1] == "01a0-here"
+    assert _resume_lost("gajae", cmd, "01a0-here", d) is None
+
+
+# ── jcode: its own schema, and two measured facts a naive reading gets wrong ───────────────────
+
+def test_jcode_argv_pins_the_version_under_the_measurement():
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "do it", d, env)
+    assert cmd[0] == "jcode"
+    # MANDATORY: auto-update defaults to true, so without this the binary replaces itself midway
+    # through a measurement — the Muse Code failure, written into the argv.
+    assert "--no-update" in cmd
+    assert cmd[cmd.index("--provider") + 1] == "openai-compatible"
+    assert cmd[cmd.index("--model") + 1] == "gpt-5.4"
+    assert cmd[-3:] == ["run", "--ndjson", "do it"]
+    # The relay token rides the ENVIRONMENT, which is what _relay_served_model keys off: a backend
+    # whose credential rides argv or a file leaves matrix rule 2 unevaluable (the openhands defect).
+    assert env["JCODE_OPENAI_COMPAT_API_BASE"].startswith("http")
+    assert env["OPENAI_COMPAT_API_KEY"]
+    # Telemetry is on by default and prints a notice on every run.
+    assert env["JCODE_NO_TELEMETRY"] == "1"
+
+
+def test_jcode_disabled_tools_are_filtered_to_names_this_runtime_has():
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    cmd = _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                       tools_disabled=["write (File Write)", "NotATool"])
+    assert cmd[cmd.index("--disabled-tools") + 1] == "write"
+    assert "write" in ALL_JCODE_TOOLS and "notatool" not in ALL_JCODE_TOOLS
+
+
+def test_jcode_usage_is_summed_across_requests_and_netted_of_both_caches():
+    # The two facts: `done.usage` holds only the LAST request's numbers (NdjsonRunState.usage is
+    # assigned, never accumulated), and `input` is GROSS — jcode's own OpenAI client says
+    # "input_tokens is the total, including both cache-read and cache-write subsets".
+    # Measured turn: tokens(10609/63, read 10431, write 175) then tokens(10748/5, read 10606,
+    # write 139), with done.usage reporting only the second.
+    evs, state = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "session_sloth_1", "model": "gpt-5.4"},
+        {"type": "tokens", "input": 10609, "output": 63, "cache_read_input": 10431,
+         "cache_creation_input": 175},
+        {"type": "tokens", "input": 10748, "output": 5, "cache_read_input": 10606,
+         "cache_creation_input": 139},
+        {"type": "text_delta", "text": "DONE"},
+        {"type": "done", "text": "DONE", "model": "gpt-5.4", "session_id": "session_sloth_1",
+         "usage": {"input_tokens": 10748, "output_tokens": 5,
+                   "cache_read_input_tokens": 10606, "cache_creation_input_tokens": 139}},
+    ])
+    res = evs[-1]
+    assert res["type"] == "result" and res["is_error"] is False and res["result"] == "DONE"
+    u = res["usage"]
+    assert u["cache_read_tokens"] == 10431 + 10606
+    assert u["cache_write_tokens"] == 175 + 139
+    assert u["input_tokens"] == (10609 - 10431 - 175) + (10748 - 10606 - 139)
+    assert u["output_tokens"] == 68
+    # Not the number the CLI offers, which would under-report the turn by more than half.
+    assert u["input_tokens"] != 10748
+
+
+def test_jcode_error_event_fails_the_turn_and_keeps_the_reason():
+    evs, _ = _norm(_jcode_to_claude, [
+        {"type": "start", "session_id": "s", "model": "gpt-5.4"},
+        {"type": "error", "message": "OpenAI-compatible chat request failed\n  status: 401 Unauthorized"},
+    ])
+    assert evs[-1]["is_error"] is True and "401 Unauthorized" in evs[-1]["result"]
+
+
+def test_jcode_eof_fails_a_stream_that_ended_with_neither_terminal_event():
+    # Killed, cancelled, or dead before the emitter. An EMPTY result lets the run loop's stderr tail
+    # be the reason instead of a sentence invented here.
+    out = _jcode_eof({"model": "gpt-5.4", "final": "half an answer"}, 1)
+    assert out[0]["is_error"] is True and out[0]["result"] == ""
+    out = _jcode_eof({"model": "gpt-5.4", "final": "an answer"}, 0)
+    assert out[0]["is_error"] is False and out[0]["result"] == "an answer"
+
+
+def test_jcode_bridges_remote_mcp_because_it_has_no_client_for_one():
+    # "jcode currently supports stdio (command-based) servers only; HTTP/SSE entries are recognized
+    # and skipped with a log line" — so without the bridge every remote server a harness declares is
+    # dropped in silence and the agent simply never has those tools.
+    assert set(_BRIDGED_TRANSPORTS["jcode"]) == {"http", "sse"}
+    d, env = _ws(), {"HOME": str(pathlib.Path(_ws()) / "h")}
+    pathlib.Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                 mcp_servers=[{"name": "deepwiki", "command": "/bin/sh", "args": ["/l.sh"]}])
+    cfg = json.loads((pathlib.Path(env["HOME"]) / ".jcode" / "mcp.json").read_text())
+    assert cfg["mcpServers"]["deepwiki"]["command"] == "/bin/sh"
+
+
+# ── opensquilla: three defaults a harness must undo ────────────────────────────────────────────
+
+def test_opensquilla_config_turns_the_router_off_and_declares_the_window():
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = pathlib.Path(d, ".harness", "opensquilla", "config.toml").read_text()
+    # Its router scores each turn and routes it across four tiers to the cheapest capable model,
+    # i.e. substitutes the model by design, and it is ON by default.
+    assert "[squilla_router]" in cfg and "enabled = false" in cfg
+    # A generic endpoint is assumed to hold 8192 tokens, and its own system block plus tool schemas
+    # are ~43k characters: the first probe died with provider_request_too_large on three sentences.
+    assert '[models.custom."gpt-5.4"]' in cfg
+    assert "context_window = 200000" in cfg
+    assert 'provider = "custom"' in cfg
+
+
+def test_opensquilla_argv_bounds_retries_and_keeps_a_session_db():
+    d, env = _ws(), {}
+    cmd = _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                             resume_session_id="sess-1", max_turns=12)
+    assert cmd[1] == "agent" and cmd[cmd.index("-m") + 1] == "hi"
+    assert "--json" in cmd and "--event-stream-stderr" in cmd
+    assert cmd[cmd.index("--permissions") + 1] == "bypass"
+    # The default is `:memory:` — without an explicit file there is NO continuity between turns.
+    assert cmd[cmd.index("--session-db-path") + 1].endswith("/.harness/opensquilla/sessions.sqlite")
+    assert cmd[cmd.index("--session-id") + 1] == "sess-1"
+    assert cmd[cmd.index("--max-iterations") + 1] == "12"
+    # A provider answering the same 503 every time should not cost minutes before the reason lands.
+    assert cmd[cmd.index("--max-provider-retries") + 1] == "2"
+    assert env["OPENSQUILLA_STATE_DIR"].endswith("/.harness/opensquilla")
+    # The relay's per-turn placeholder, not the provider key — and in the ENVIRONMENT, which is
+    # where _relay_served_model looks for the route.
+    assert env["CUSTOM_LLM_API_KEY"].startswith("hr-relay-")
+
+
+def test_opensquilla_final_answer_comes_from_the_transcript_not_from_text():
+    # MEASURED: asked to "reply with exactly DONE", its stdout object's `text` was
+    # "I'll create `probe.txt` with the requested content and verify it.DONE" — the whole turn's
+    # assistant output concatenated — while the transcript's LAST assistant message was "DONE".
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla")
+    base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "go"}]}},
+        {"type": "message", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "I’ll create probe.txt and verify it."},
+            {"type": "toolCall", "name": "write_file", "id": "call_1", "arguments": {}}]}},
+        {"type": "message", "message": {"role": "toolResult", "toolCallId": "call_1",
+                                        "toolName": "write_file", "isError": False,
+                                        "content": [{"type": "text", "text": "Written 6 bytes"}]}},
+        {"type": "message", "message": {"role": "assistant",
+                                        "content": [{"type": "text", "text": "DONE"}]}},
+    ]))
+    final_obj = {"status": "ok", "session_key": "s1", "text": "I’ll create probe.txt and verify it.DONE",
+                 "usage": {"input_tokens": 25343, "output_tokens": 346, "cached_tokens": 16764,
+                           "model_usage_breakdown": [{"cache_write_tokens": 8570}]}}
+    evs, state = _norm(_opensquilla_to_claude, [
+        {"_event": True, "schema_version": 1, "kind": "tool_use_start",
+         "tool_use_id": "call_1", "tool_name": "write_file"},
+        {"_event": True, "schema_version": 1, "kind": "tool_result",
+         "tool_use_id": "call_1", "tool_name": "write_file", "is_error": False},
+        final_obj,
+    ], cwd=d)
+    tail = _opensquilla_eof(state, 0)
+    res = tail[-1]
+    assert res["is_error"] is False
+    assert res["result"] == "DONE"
+    # the tool result's CONTENT, which the progress stream withholds by design, comes back here
+    assert any(e.get("type") == "user" and "Written 6 bytes" in json.dumps(e) for e in tail)
+    # usage netted: cached and cache_write are both SUBSETS of input_tokens (measured: 16764 + 8570
+    # is within nine tokens of 25343).
+    assert res["usage"]["input_tokens"] == 25343 - 16764 - 8570
+    assert res["usage"]["cache_read_tokens"] == 16764
+    assert res["usage"]["cache_write_tokens"] == 8570
+
+
+def test_opensquilla_a_routed_model_fails_the_turn():
+    # The router is off by configuration. If one of its decisions still arrives, the turn ran on a
+    # model nobody asked for, and a substitution is a finding — never a pass.
+    state = {"model": "gpt-5.4", "final": "an answer", "cwd": _ws()}
+    _opensquilla_to_claude({"_event": True, "kind": "router_decision", "tier": "c1",
+                            "model": "deepseek-v4-flash", "source": "router"}, state)
+    _opensquilla_to_claude({"status": "ok", "session_key": "s", "usage": {}}, state)
+    res = _opensquilla_eof(state, 0)[-1]
+    assert res["is_error"] is True
+    assert "deepseek-v4-flash" in res["result"] and "gpt-5.4" in res["result"]
+
+
+def test_opensquilla_only_event_objects_are_read_as_events():
+    # Its own warning: stderr also carries ordinary diagnostics, so only `_event: true` counts.
+    state = {"model": "gpt-5.4", "final": "", "cwd": _ws()}
+    assert _opensquilla_to_claude({"kind": "tool_use_start", "tool_name": "rm_rf"}, state) == []
+    assert "_sq_final" not in state
+
+
+def test_opensquilla_usage_of_nothing_is_nothing():
+    assert _opensquilla_usage(None) == {}
+    assert _opensquilla_usage({"input_tokens": 0, "output_tokens": 0}) == {}
+
+
+# ── nanobot: the driver's contract with the runner ─────────────────────────────────────────────
+
+def test_nanobot_job_puts_the_session_store_inside_the_checkpointed_tree():
+    d, env = _ws(), {}
+    cmd = _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                         resume_session_id="hr-1")
+    assert cmd[1].endswith("nanobot_driver.py")
+    job = json.loads(cmd[2])
+    assert job["session_key"] == "hr-1"
+    # Sessions live beside the CONFIG file (get_data_dir() is get_config_path().parent), so the
+    # config goes in .harness/: checkpointed, and out of the produced-files list.
+    assert job["config_path"].endswith("/.harness/nanobot/config.json")
+    # And the agent's workspace is a directory INSIDE the session rather than the session itself,
+    # because nanobot refuses a session store that sits inside the workspace the agent can write
+    # ("session storage must be outside the agent workspace"). Measured against the real package:
+    # with workspace == the session directory every turn dies before the first model call.
+    assert job["workspace"] == str(pathlib.Path(d) / "workspace")
+    assert pathlib.Path(job["workspace"]).is_dir()
+    sessions = pathlib.Path(job["config_path"]).parent / "sessions"
+    assert not sessions.resolve().is_relative_to(pathlib.Path(job["workspace"]).resolve())
+    # …and still inside the session directory, which is what the checkpoint tars.
+    assert sessions.resolve().is_relative_to(pathlib.Path(d).resolve())
+    # The instruction file and the skills follow the workspace, or they are written and never read.
+    assert _agent_doc_path(d, "nanobot") == pathlib.Path(d) / "workspace" / "AGENTS.md"
+
+
+def test_nanobot_config_names_the_key_and_offers_no_fallback_model():
+    d, env = _ws(), {}
+    _build_nanobot("openai-api", Auth(api_key="sk-secret", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())
+    assert cfg["providers"]["custom"]["apiKey"] == "${HR_NANOBOT_RELAY_KEY}"
+    assert "sk-secret" not in json.dumps(cfg)
+    assert env["HR_NANOBOT_RELAY_KEY"].startswith("hr-relay-")
+    assert env["HR_NANOBOT_RELAY_KEY"] != "sk-secret"
+    # A fallback model is a substitution, and this product promises the model that was asked for.
+    assert cfg["agents"]["defaults"]["fallbackModels"] == []
+    # `apiType` is REFUSED on any provider but `openai` and the refusal rejects the WHOLE config,
+    # so sending it would kill every turn over a field that was only ever decoration.
+    assert "apiType" not in cfg["providers"]["custom"]
+    # The config holds the relay placeholder today and must never ride a checkpoint tarball even if
+    # a future build stops resolving ${VAR}. The sessions beside it MUST travel, so the exclusion
+    # names the file, not the directory.
+    assert "./.harness/nanobot/config.json" in CHECKPOINT_EXCLUDE
+    assert not any(x.rstrip("/").endswith(".harness/nanobot") for x in CHECKPOINT_EXCLUDE)
+
+
+def test_nanobot_session_lookup_uses_the_name_nanobot_itself_would_open():
+    import base64 as _b64
+    d = _ws()
+    cmd = _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, {},
+                         resume_session_id="hr:one")
+    assert _resume_lost("nanobot", cmd, "hr:one", d) == "hr:one"
+    ws_dir = pathlib.Path(d, ".harness", "nanobot", "sessions", "deadbeef")
+    ws_dir.mkdir(parents=True)
+    name = _b64.urlsafe_b64encode(b"hr:one").decode().rstrip("=") + ".jsonl"
+    (ws_dir / name).write_text("{}")
+    assert _resume_lost("nanobot", cmd, "hr:one", d) is None
+
+
+def test_nanobot_tool_list_is_the_one_its_loop_registers():
+    # 22, read off its own start-up line on 0.3.5. Writing has three doors and shell three, which is
+    # why withholding one tool is not withholding a capability.
+    assert len(ALL_NANOBOT_TOOLS) == 22
+    for n in ("write_file", "edit_file", "apply_patch", "exec", "exec_session", "run_cli_app"):
+        assert n in ALL_NANOBOT_TOOLS
+
+
+# ── the real bytes ─────────────────────────────────────────────────────────────────────────────
+# Everything above this line is a hand-written event, and a test written from the implementation
+# can only prove the implementation is self-consistent. These replay CAPTURED streams — the actual
+# stdout of the pinned binaries on 2026-10-02, against a live provider, trimmed and path-scrubbed
+# but otherwise unaltered — through the shipped normaliser.
+
+FIX = pathlib.Path(__file__).resolve().parent / "fixtures" / "batch3"
+
+
+def _replay(fn, name, model, eof=None, rc=0):
+    state = {"model": model, "final": "", "cwd": ""}
+    evs = []
+    for ln in (FIX / name).read_text().splitlines():
+        if ln.strip().startswith("{"):
+            evs += fn(json.loads(ln), state)
+    res = next((e for e in evs if e.get("type") == "result"), None)
+    if res is None and eof is not None:
+        tail = eof(state, rc)
+        evs += tail
+        res = next((e for e in tail if e.get("type") == "result"), None)
+    return evs, res
+
+
+def test_real_gajae_turn_that_wrote_a_file():
+    evs, res = _replay(_gajae_to_claude, "gajae-write-file.ndjson", "openai/gpt-6-luna")
+    assert evs[0]["type"] == "system" and evs[0]["subtype"] == "init"
+    assert any(e.get("type") == "assistant" and "tool_use" in json.dumps(e) for e in evs)
+    assert any(e.get("type") == "user" and "Successfully wrote" in json.dumps(e) for e in evs)
+    assert res["is_error"] is False and res["result"] == "DONE"
+    # The served model comes off the CLI's own assistant messages, so rule 2 is answerable here
+    # without the relay as well as with it.
+    assert res["model"] == "openai/gpt-6-luna"
+    assert res["usage"]["input_tokens"] > 0 and res["usage"]["output_tokens"] > 0
+
+
+def test_real_gajae_turn_that_the_provider_refused():
+    evs, res = _replay(_gajae_to_claude, "gajae-provider-401.ndjson", "openai/gpt-6-luna")
+    assert res["is_error"] is True
+    assert res["result"].startswith("401 Authentication failed")
+    # and the failure is NOT rendered as the assistant's answer
+    assert not any(e.get("type") == "assistant" for e in evs)
+
+
+def test_real_jcode_turn_sums_the_usage_its_own_done_event_under_reports():
+    evs, res = _replay(_jcode_to_claude, "jcode-write-file.ndjson", "openai/gpt-6-luna",
+                       eof=_jcode_eof)
+    assert res["is_error"] is False and res["result"] == "DONE"
+    assert any("tool_use" in json.dumps(e) for e in evs)
+    assert any("Created probe.txt" in json.dumps(e) for e in evs)
+    u = res["usage"]
+    # The capture's own `done.usage` says input_tokens 10748; the two `tokens` events say 10609 and
+    # 10748, and both are gross. This is the turn, not the last request.
+    assert u["cache_read_tokens"] == 21037
+    assert u["cache_write_tokens"] == 314
+    assert u["output_tokens"] == 68
+
+
+def test_real_jcode_turn_that_the_provider_refused():
+    _evs, res = _replay(_jcode_to_claude, "jcode-provider-401.ndjson", "openai/gpt-6-luna",
+                        eof=_jcode_eof, rc=1)
+    assert res["is_error"] is True
+    assert "401 Unauthorized" in res["result"]
+    # The message names the auth variable by NAME and never carries its value.
+    assert "OPENAI_COMPAT_API_KEY" in res["result"] and "sk-" not in res["result"]
+
+
+def test_real_mimo_turn_through_opencodes_normaliser_unchanged():
+    from server import _opencode_eof
+    evs, res = _replay(_opencode_to_claude, "mimo-first-turn.ndjson", "openai/gpt-6-luna",
+                       eof=_opencode_eof)
+    assert evs[0]["subtype"] == "init"
+    assert res["is_error"] is False and res["result"] == "OK"
+    # step-finish's tokens, read by opencode's own accumulator: `input` is already cache-exclusive
+    # in this fork as in opencode, and reasoning is added back into output.
+    assert res["usage"]["input_tokens"] == 14413
+    assert res["usage"]["output_tokens"] == 37

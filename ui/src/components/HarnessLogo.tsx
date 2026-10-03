@@ -21,6 +21,14 @@ const LOGO: Record<string, string> = {
   openhands: '/logos/openhands.png',   // OpenHands' own app icon (public/apple-touch-icon.png in the MIT OpenHands/OpenHands repository)
   cheetahclaws: '/logos/cheetahclaws.png',   // the head and shoulders of CheetahClaws' own logo (docs/media/logos/logo-5.png in the Apache-2.0 SAIL-Research-Lab/cheetahclaws repository), cut square so it reads at 26 px; the app icon drew the whole running cheetah as a thin band and rendered as a sliver (Richard, 2026-09-27)
   systemone: '/logos/systemone.png',   // the System One Harness's own mark (the project has no vendor logo; Jev is TypeSafe's model, not the harness)
+  gajae: '/logos/gajae.png',   // the gajae-code character, cut square out of assets/logo-vertical.png in the MIT Yeachan-Heo/gajae-code repository (the full asset is a portrait lockup with two wordmarks under it, which reads as a stripe at 26 px)
+  jcode: '/logos/jcode.png',   // jcode's own app icon (assets/app-icons/Jcode.icns in the MIT 1jehuang/jcode repository), the 1024 px face resized. It is a BLACK mark on transparency, so it carries no contrast on a dark surface — upstream ships no light variant
+  opensquilla: '/logos/opensquilla.png',   // the OpenSquilla mark (assets/opensquilla-mark.png in the Apache-2.0 TokenRhythm/opensquilla repository), already square
+  nanobot: '/logos/nanobot.svg',   // the nanobot mark (images/nanobot_mark.svg in the MIT HKUDS/nanobot repository); an SVG like cursor.svg, which this map already serves
+  // NO entry for `mimo`, deliberately: MiMo Code ships only a 1280x381 banner whose mark IS the
+  // wordmark, and a crop of it is unreadable at 26 px. The generic glyph is the honest fallback —
+  // a mapping to a file that is not there renders a broken image, which is worse. If the official
+  // app icon is supplied the way kimi's was, this is a one-line change.
 };
 
 export function HarnessLogo({ id, size = 26 }: { id: string; size?: number }) {

@@ -1763,3 +1763,151 @@ before. The hosted platform then took OpenRouter as the route for this model, so
 same twelve bases as this one; its comment keeps the TokenRouter and direct-OpenAI refusal for
 organizations that bring such a key, the rule the self-hosted catalog states.
 
+
+## Five bases added together: mimo, gajae, jcode, opensquilla, nanobot (2026-10-02)
+
+MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT), jcode
+(1jehuang/jcode, MIT), OpenSquilla (TokenRhythm/opensquilla, Apache-2.0) and nanobot
+(HKUDS/nanobot, MIT), as the seventeenth to twenty-first bases.
+
+**NO SUPPORT-MATRIX COLUMN HAS RUN ON ANY OF THEM.** Everything below is behaviour measured
+against the pinned build on a developer machine — flags, event schema, failure reporting, resume,
+usage accounting, tool policy — through a real provider (Vercel's AI gateway) one turn at a time.
+That is not the same evidence as a column: it says each base works, not that each MODEL it offers
+works, and matrix rules 1 and 3 were not exercised at all. The catalogs say so at the ids.
+
+### What each one is, and what it shares
+
+| base | pinned | lineage | normaliser | turn process |
+|---|---|---|---|---|
+| mimo | @mimo-ai/cli 0.1.15 | an **opencode fork** (its repo root package.json is still `"name": "opencode"`) | `_opencode_to_claude`, unchanged | `mimo run --format json` |
+| gajae | gjc 0.18.5 | **pi's lineage** (docs/porting-from-pi-mono.md; its deps still carry `pi-ai`) | `_gajae_to_claude`, which delegates to `_pi_to_claude` | `gjc -p --mode json` |
+| jcode | v0.90.0 | its own (Rust) | `_jcode_to_claude`, its own | `jcode … run --ndjson` |
+| opensquilla | 0.5.6 | openclaw/hermes lineage (it migrates `~/.openclaw` and `~/.hermes`; its transcript is the pi message shape) | `_opensquilla_to_claude`, its own | `opensquilla agent --json --event-stream-stderr` |
+| nanobot | nanobot-ai 0.3.5 | its own (a personal-agent runtime, not a coding CLI) | the claude passthrough | `runner/nanobot_driver.py`, in process through its SDK |
+
+### The defects each one's defaults would have caused, and what was done
+
+- **opensquilla routes the model away from you by default.** `[squilla_router] enabled = true` ships
+  on, and the router "scores each turn … then routes it across four tiers to the cheapest capable
+  model". That is matrix rule 2 violated by configuration, not by accident. The builder writes
+  `enabled = false`, and if a `router_decision` event arrives anyway the turn FAILS naming the model
+  it ran instead — the rule pi already enforces for a CLI that substitutes.
+- **opensquilla assumes a generic endpoint holds 8192 tokens.** The first live probe died with
+  `provider_request_too_large` — "The fixed system instructions exceed the provider request budget"
+  — on a three-sentence prompt, because its own system block is ~14k characters and its tool schemas
+  ~29k. The builder declares `context_window` per model.
+- **opensquilla's `--session-db-path` defaults to `:memory:`**, i.e. no continuity between turns at
+  all. It is named explicitly, inside `.harness/`, so the conversation is checkpointed.
+- **jcode replaces itself mid-measurement.** Auto-update is on by default; `--no-update` is passed
+  on every turn. (`--auto-update` takes no value — `--auto-update=false` is a clap usage error.)
+  Its anonymous telemetry is also on by default and prints to stderr: `JCODE_NO_TELEMETRY=1`.
+- **jcode's own `done.usage` is not the turn's usage.** `NdjsonRunState.usage` is ASSIGNED on every
+  `TokenUsage` event rather than accumulated, so it holds the LAST request's numbers: a measured
+  two-request turn reported input 10,748 while its two `tokens` events summed to 21,357. The
+  normaliser accumulates the events and ignores `done.usage`. Its `input` is also GROSS — jcode's
+  own OpenAI client says "input_tokens is the total, including both cache-read and cache-write
+  subsets" — so BOTH caches are netted out, where `_norm_token_usage` nets only the read.
+- **jcode has no remote MCP client at all.** "jcode currently supports stdio (command-based)
+  servers only; HTTP/SSE entries are recognized and skipped with a log line." Without the runner's
+  bridge every remote server a harness declares is dropped in silence, so jcode is in
+  `_BRIDGED_TRANSPORTS` for both transports. opensquilla takes stdio and SSE but not streamable
+  HTTP, so it is bridged for `http`.
+- **nanobot's CLI seeds the workspace and makes a second git repository in it.** `nanobot agent -m`
+  calls `sync_workspace_templates()`, which creates AGENTS.md, SOUL.md, USER.md, HEARTBEAT.md,
+  memory/MEMORY.md, memory/history.jsonl, prompts/README.md and skills/ and then `GitStore.init()`s
+  the workspace — measured, all eight on a bare directory. Its SDK path calls neither (only
+  `.nanobot/workspace-id` appears), which is one of the reasons this base is driven in process.
+- **nanobot refuses a session store that sits inside the agent's workspace**, and that rules out
+  the arrangement every other base here uses. `JsonlSessionStore.__init__` raises "session storage
+  must be outside the agent workspace" when the sessions root is the workspace or under it — a
+  sound rule, since the agent has file tools over its workspace and must not be able to rewrite its
+  own conversation. The conversation still has to ride the checkpoint, which is a tar of the
+  session directory, so the sessions root has to be inside the session and outside the workspace:
+  the only shape that satisfies both is config (and therefore sessions) in `.harness/nanobot/` with
+  the agent's workspace one level down, at `<session>/workspace`. This base's deliverables
+  therefore arrive as `workspace/<name>`, and its AGENTS.md and skills live there too. The driver
+  also chdirs into it, so a shell that writes a relative path cannot land a level above what the
+  model was told it has — Agent Zero's artifact failures were exactly that.
+  **Found by running the runner's real argv against the real package**, not by any test: the
+  driver's own fake could not have seen it, which is the whole of why that end-to-end was run.
+- **nanobot's usage is gross too.** A measured two-request turn: `input_tokens` 11,107 with
+  `cache_read_tokens` 5,503, while the requests reported 5,506 and 5,601 — the cached read is a
+  SUBSET. The driver nets it.
+- **gajae auto-enables `/v1/models` discovery on a custom provider.** Against Vercel it listed 376
+  upstream models under our provider name. It is marked optional, so an endpoint without a models
+  list degrades to the static entry, and the builder names the model fully qualified so a fuzzy
+  `--model` cannot land on a discovered id. Its signed model-preset registry — an HTTPS fetch that
+  can rewrite which model a preset names — is turned off.
+- **jcode's Linux release is a PAIR, and its macOS release is not.** `jcode-linux-<arch>.tar.gz`
+  holds a 505-byte `sh` launcher plus `jcode-linux-<arch>.bin`; the launcher puts its own directory
+  on `LD_LIBRARY_PATH` and execs the `.bin` beside it. The macOS archive holds a single binary and
+  no launcher — so a probe on a developer's Mac shows one layout and the image gets the other.
+  Installing "the file called jcode*" took the launcher, left its `.bin` behind, and produced an
+  executable that is on PATH, satisfies `backend_bin`, and dies on its first turn. Found by running
+  the installer function against the real Linux asset, which is now part of what is done before a
+  base is called installed: `install_mimo`, `install_gajae` and `install_jcode` each run the binary
+  and compare the version it REPORTS, and remove what they put down when it does not match.
+- **mimo's first run on a fresh volume is a one-time SQLite migration.** Measured: over nine
+  minutes with no output before it was killed, about twenty seconds warm. The installer warms a
+  throwaway home so a turn never pays it.
+
+### Failure reporting, per base (checklist item 8: check, do not assume)
+
+| base | how a provider failure arrives | exit |
+|---|---|---|
+| mimo | opencode's `error` event | 1 |
+| gajae | assistant `message_end` with `stopReason:"error"`, `errorStatus`, `errorMessage` — pi's contract exactly; ONE attempt on a 401, no retry storm. Also an `agent_failed` event pi has no branch for, which is why gajae carries its own wrapper | 1 |
+| jcode | a real `error` event naming the endpoint, the model, the auth variable's NAME (never its value), the status and the provider's body | 1 |
+| opensquilla | an `_event` of kind `error`, and `errors[]` on the final object | 1 |
+| nanobot | `run.failed`, or a `run.completed` whose RunResult carries an `error` or a non-completed `stop_reason` | driver's |
+
+### Tool enforcement, measured
+
+`hard` on four, and each was proven by asking the model for its own tool list with one tool
+withheld: gajae's `--tools` allowlist (write absent), jcode's `--disabled-tools` (write absent),
+mimo's `permission.<key>: "deny"` (opencode's, inherited), nanobot's session policy (write_file
+absent — and the model then wrote the file with `exec`, which is the honest limit every
+shell-bearing base has). `instruction` on opensquilla, because `--permissions` picks a posture and
+there is no deny list anywhere on its agent CLI; the disabled set reaches the model through
+AGENTS.md instead, as it does for codex, hermes, dsh and gemini.
+
+nanobot's policy is set on the SESSION rather than on the tool registry on purpose: the loop
+applies it per turn to the registry it is about to use, which by then also holds the MCP provider's
+tools. A registry filtered when the driver started would withhold the built-ins and let every MCP
+tool through — openhands' half-policy defect. The driver refuses to run the turn if the policy did
+not take.
+
+### End to end, with the runner's own argv and the runner's own relay (2026-10-02/03)
+
+Not the probe commands typed by hand: `_build_<base>` was called with a live connection, the
+loopback relay was started in the same process, the argv it returned was run against the pinned
+binary, and the bytes that came back were fed to the shipped normaliser. The task was the same on
+each: write a file and reply with exactly DONE.
+
+| base | file written | result | usage read off the record |
+|---|---|---|---|
+| gajae | `e2e.txt` = kiwi | success, `DONE`, served model `openai/gpt-6-luna` | 6 fresh in / 37 out, 11,105 cache read, 11,157 cache write |
+| jcode | `e2e.txt` = kiwi | success, `DONE` | 6 fresh in / 66 out, 10,592 cache read, 10,741 cache write |
+| opensquilla | `e2e.txt` = kiwi | success, `DONE` (from the transcript, not the concatenated `text`) | 6 fresh in / 189 out, 8,281 cache read, 8,408 cache write |
+| nanobot | `workspace/e2e.txt` = kiwi | success, `DONE` | 5,596 fresh in / 31 out, 5,505 cache read |
+| mimo | `e2e.txt` = kiwi | success, `DONE` | 12 fresh in / 406 out, 43,991 cache read, 15,155 cache write |
+
+mimo's end-to-end on a FRESH home timed out at 300 s inside its one-time SQLite migration; on a warm
+home the same argv answered normally, which is the row above. That cost is a property of a fresh
+data volume, not of a turn, and it is exactly why `install_mimo` warms a throwaway home at install.
+
+The relay is the one that matters for rule 2: all five reached the provider through it with the
+placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
+gajae also names the served model itself, on every assistant message.
+
+### What is NOT measured, and must be before any of this counts as a column
+
+- No scenario column on any provider, so matrix rule 1 (served by the connection under test) and
+  rule 3 (rendered cards equal the stored files) are unexercised on all five.
+- Rule 2 is answerable on all five — every one of them rides the loopback relay with the token in
+  the ENVIRONMENT, which is what `_relay_served_model` keys off — but it has not been READ on a
+  real turn record yet. None of these bases names the served model itself.
+- No custom-harness row and no plugin row. All five are in `custom-harness.mjs`'s BASES, so the
+  dimension will cover them when it runs.
+- The family tour has not been run on any of them.
