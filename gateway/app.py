@@ -5559,6 +5559,20 @@ def _blocks_from_canonical(ev: dict) -> list[tuple[str, object]]:
         # learn the context was dropped, so it is a short, honest note at the top of the reply.
         out.append(("text", "_Note: the earlier conversation could not be restored. This reply "
                             "continues as a new session, without that context._\n\n"))
+    elif t == "system" and ev.get("subtype") == "notice":
+        # A sentence the CLI itself said about how the turn went — not its answer, and not a
+        # failure. OpenSquilla reports "Provider context limit reached; compacting older context
+        # before retrying" this way, and a person reading a turn that took three minutes and lost
+        # its earlier context has no other way to learn why. The runner decides what is worth
+        # saying; this is the one place it can be said, because an unrecognised system subtype is
+        # dropped here in silence, and a runner that emits one is writing to a surface that does
+        # not exist (which is how this event was nearly shipped unrendered).
+        #
+        # Bounded and de-duplicated by the runner, prefixed like the other two notes, and rendered
+        # as the reply's own text rather than as an answer the model gave.
+        text = str(ev.get("text") or "").strip()
+        if text:
+            out.append(("text", f"\n\n_Note: {text[:500]}_\n"))
     elif t == "system" and ev.get("subtype") == "mcp_unavailable":
         # A CLI that runs the turn without an MCP server it could not reach, and says nothing (Kimi
         # Code CLI does exactly that), leaves a person wondering why the agent never used their

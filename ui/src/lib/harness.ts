@@ -218,6 +218,30 @@ export const OOB: OobHarness[] = [
 
 export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
 
+// ── the instruction file each base actually reads ─────────────────────────────────────────────
+// The NAME of the file the runner writes for a base, which is the label the settings page puts on
+// the instructions box. It has to agree with runner/server.py's `_agent_doc_path`, and until
+// 2026-10-03 it did not: the page labelled qwen and gemini "AGENTS.md" while the runner wrote
+// QWEN.md and GEMINI.md, so a person edited a box named for a file their agent never read.
+// gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
+// next base that chooses its own name cannot drift the same way.
+//
+// systemone is the one base with no file at all: it reads no workspace and its instructions travel
+// in the job, so the page calls the box "Instructions".
+export const INSTRUCTION_FILE: Record<string, string> = {
+  qwen: 'QWEN.md',
+  gemini: 'GEMINI.md',
+  systemone: 'Instructions',
+};
+const AGENTS_MD_BASES = [
+  'codex', 'hermes', 'omp', 'pi', 'opencode', 'dsh', 'cline', 'goose', 'kimi', 'aider',
+  'openhands', 'mimo', 'gajae', 'jcode', 'opensquilla', 'nanobot',
+];
+export function instructionFileLabel(baseId: string | null | undefined): string {
+  const id = baseId || '';
+  return INSTRUCTION_FILE[id] || (AGENTS_MD_BASES.includes(id) ? 'AGENTS.md' : 'CLAUDE.md');
+}
+
 // ── model catalog: the GATEWAY owns it, this file does not ────────────────────────────
 // The `models` / `defaultModel` fields above used to be the console's own copy of the
 // gateway's _MODEL_CATALOG. Two lists meant two places to edit, and only one of them got

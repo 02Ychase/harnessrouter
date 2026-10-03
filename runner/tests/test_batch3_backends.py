@@ -598,3 +598,21 @@ def test_real_mimo_turn_through_opencodes_normaliser_unchanged():
     # in this fork as in opencode, and reasoning is added back into output.
     assert res["usage"]["input_tokens"] == 14413
     assert res["usage"]["output_tokens"] == 37
+
+
+def test_opensquilla_warning_becomes_a_notice_the_gateway_renders_and_repeats_once():
+    # Its compaction warning repeats once per retry; three identical notes on one reply is noise,
+    # so the de-duplication happens here rather than in the gateway.
+    state = {"model": "gpt-5.4", "final": "", "cwd": _ws()}
+    w = {"_event": True, "schema_version": 1, "kind": "warning", "code": "***",
+         "message": "Provider context limit reached; compacting older context before retrying."}
+    first = _opensquilla_to_claude(dict(w), state)
+    again = _opensquilla_to_claude(dict(w), state)
+    assert len(first) == 1 and first[0]["subtype"] == "notice"
+    assert first[0]["text"].startswith("Provider context limit reached")
+    assert again == []
+    # a DIFFERENT warning is still said
+    other = _opensquilla_to_claude({**w, "message": "Search provider is not configured."}, state)
+    assert len(other) == 1 and other[0]["subtype"] == "notice"
+    # and an empty one is not
+    assert _opensquilla_to_claude({**w, "message": ""}, state) == []

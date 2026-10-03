@@ -37,6 +37,50 @@ const toolLabel = (t) => {
   return name === 'write' && xd ? xd[0] : name;
 };
 const MCP_TOOL = new RegExp(`(^|[^a-z])mcp([^a-z]|$)|${MCP_NAME}|read_wiki_structure|read_wiki_contents|ask_question`, 'i');
+
+// THE TOOL THIS DIMENSION SWITCHES OFF, PER BASE — and it has to be a tool that base actually has.
+//
+// This was the single id `WebSearch` for every base. A tool id that matches nothing in a runtime is
+// dropped on the way through and disables nothing, so on every base without a tool of that exact
+// name the `disabled_tool_unused` claim was VACUOUSLY true: the row passed a check that was not
+// running. Eleven of the twenty bases were in that state — the six named in the 2026-09-28 sweep
+// plus the five added on 2026-10-02, which spell theirs `web_search` / `websearch`.
+//
+// Each id below is read off that base's own entry in the gateway's _BASE_CATALOG, and each is a
+// tool the stamp task does not need: the task reads a skill, runs its script through the shell and
+// reports a line. Nothing here switches off a shell, a read or a write, because disabling one of
+// those would fail the task rather than test the policy.
+//
+// `null` means THIS DIMENSION CANNOT TEST THE POLICY ON THIS BASE, and the row says so instead of
+// passing: aider's catalog is one tool, Shell, and the task needs it. A vacuous pass is worse than
+// an honest gap — it is the thing this table exists to end.
+const DISABLED_TOOL = {
+  'claude-code': 'WebSearch',
+  codex: 'git',                  // shell/apply_patch/read_file/write_file/git — git is the spare one
+  hermes: 'web_search',
+  pi: 'edit',                    // bash/read/write/edit; the script is run, not edited
+  dsh: 'web_search',
+  opencode: 'websearch',
+  qwen: 'web_fetch',
+  gemini: 'google_web_search',
+  cline: 'fetch_web_content',
+  omp: 'web_search',
+  goose: 'read_image',           // shell/write/edit/tree/read_image
+  kimi: 'FetchURL',
+  aider: null,                   // ONE tool, Shell, and the task needs it — see above
+  openhands: 'Todo',             // Shell/Edit/Todo
+  cheetahclaws: 'WebSearch',
+  mimo: 'websearch',
+  gajae: 'web_search',
+  jcode: 'websearch',
+  opensquilla: 'web_search',
+  nanobot: 'web_search',
+};
+// Compare the way a person would: ignore case and the separators runtimes disagree about, so
+// `web_search`, `websearch` and `WebSearch` are one name. NOT a substring match — `search` must not
+// match `search_sessions`, and the old `/websearch/i` would not have matched `web_search` at all.
+const sameTool = (a, b) => String(a).toLowerCase().replace(/[^a-z0-9]/g, '')
+                        === String(b).toLowerCase().replace(/[^a-z0-9]/g, '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = new Set(['done', 'completed', 'failed', 'incomplete', 'cancelled']);
 const log = (s) => console.log(`${new Date().toISOString()} ${s}`);
@@ -109,6 +153,15 @@ try {
 
   for (const base of BASES) {
     const rec = { base, at: new Date().toISOString() };
+    // The tool this base's row switches off. Recorded on the row, because "which tool" is half of
+    // what the claim means and a reader cannot check the claim without it.
+    const off_tool = Object.prototype.hasOwnProperty.call(DISABLED_TOOL, base) ? DISABLED_TOOL[base] : null;
+    rec.disabled_tool = off_tool;
+    if (off_tool === null) {
+      rec.disabled_tool_why = Object.prototype.hasOwnProperty.call(DISABLED_TOOL, base)
+        ? 'this base has no tool the stamp task can spare, so the policy is not testable here'
+        : 'no tool chosen for this base in DISABLED_TOOL — add one before trusting its row';
+    }
     let hid = null;
     try {
       // A harness a person would build: its own skill (with its own script), and one inherited
@@ -119,7 +172,7 @@ try {
           name: `matrix custom ${base}`, base,
           system_prompt: 'You follow your skills exactly.',
           skills: [SKILL('matrix-stamp')],
-          disabled_tools: ['WebSearch'],
+          disabled_tools: off_tool ? [off_tool] : [],
           mcp_servers: MCP_URL === 'off' ? [] : [{ name: MCP_NAME, url: MCP_URL, transport: 'http' }],
         }),
       });
@@ -131,7 +184,8 @@ try {
       const back = await api(`/api/harness/v1/harnesses/${hid}`);
       const h = back.json || {};
       rec.skill_stored = ((h.skills || []).some((s) => (s.name || s.id) === 'matrix-stamp'));
-      rec.tool_disabled_stored = (h.disabledTools || h.disabled_tools || []).includes('WebSearch');
+      rec.tool_disabled_stored = off_tool === null ? null
+        : (h.disabledTools || h.disabled_tools || []).some((t) => sameTool(t, off_tool));
       rec.mcp_stored = MCP_URL === 'off' ? null
         : (h.mcpServers || h.mcp_servers || []).some((m) => String(m.name || '') === MCP_NAME);
 
@@ -172,7 +226,9 @@ try {
       // the three claims, each read from the stored record
       rec.skill_reached = answer.includes(token);              // the bundle got to the agent
       rec.script_ran = files.some((f) => f.includes('stamp.txt'));  // its script actually executed
-      rec.disabled_tool_unused = !tools.some((t) => /websearch/i.test(t));
+      // null, not true, when there was nothing to switch off: the claim is "the tool policy took
+      // effect", and a base with no spare tool has not shown that either way.
+      rec.disabled_tool_unused = off_tool === null ? null : !tools.some((t) => sameTool(t, off_tool));
       // The MCP half, in the same harness and the same session: a second turn that can only be
       // answered by calling the declared server. Judged on the CALL, not on what it returned: a
       // public server's prose is not ours to pin, but a tool call is a fact in the record.
@@ -202,13 +258,16 @@ try {
       }
       // the MCP half only counts against a row when it actually ran
       const mcpOk = MCP_URL === 'off' || rec.mcp_called === null || (rec.mcp_stored && rec.mcp_called);
-      rec.ok = !!(rec.skill_stored && rec.tool_disabled_stored && rec.skill_reached && rec.script_ran && rec.disabled_tool_unused && mcpOk);
+      // The tool half only counts against a row when there was a tool to switch off — the same
+      // rule the MCP half already follows when the public server is unreachable.
+      const toolOk = off_tool === null || (rec.tool_disabled_stored && rec.disabled_tool_unused);
+      rec.ok = !!(rec.skill_stored && rec.skill_reached && rec.script_ran && toolOk && mcpOk);
       rec.why = rec.ok ? '' : [
         rec.skill_stored ? '' : 'the skill was not stored on the harness',
-        rec.tool_disabled_stored ? '' : 'the disabled tool was not stored',
+        (off_tool !== null && !rec.tool_disabled_stored) ? `the disabled tool ${off_tool} was not stored` : '',
         rec.skill_reached ? '' : `the answer does not carry the skill's stamp: ${answer.slice(-160)}`,
         rec.script_ran ? '' : `the skill's script left no file (files: ${files.join(',') || 'none'})`,
-        rec.disabled_tool_unused ? '' : `a disabled tool was called: ${tools.join(',')}`,
+        (off_tool !== null && !rec.disabled_tool_unused) ? `the disabled tool ${off_tool} was called: ${tools.join(',')}` : '',
         rec.error ? `the turn ended: ${rec.error}` : '',
         (MCP_URL !== 'off' && rec.mcp_called === false && !rec.mcp_stored) ? 'the MCP server was not stored on the harness' : '',
         (MCP_URL !== 'off' && rec.mcp_called === false && rec.mcp_stored)

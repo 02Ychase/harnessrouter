@@ -597,6 +597,11 @@ wrong. Two suggestions, both the maintainer's call: let the dimension name the t
 (a base that has no `WebSearch` could disable one it has), and make the script write something the
 agent cannot predict from reading it.
 
+**The first of those two was done on 2026-10-03** (see "The disabled tool is the base's own"
+below): `custom-harness.mjs` now carries a per-base `DISABLED_TOOL` table, held to the gateway's
+`_BASE_CATALOG` by a test. The second — a script whose output the agent cannot predict from reading
+it — is still open.
+
 **Known open question: `max_context_size`.** kimi requires one per model and plans compaction
 against it; the catalog carries no per-id window, so `KIMI_CONTEXT_WINDOW` holds one value for all
 ids, exactly as `CODEX_CONTEXT_WINDOW` does for codex. Being wrong changes WHEN the agent compacts,
@@ -713,11 +718,15 @@ runner's, where the same class of bump breaks FastAPI outright.
 **Known limitation: no tool loop, so the custom-harness dimension's disabled tool is not aider's.**
 The request body's keys are exactly `['messages','model','temperature']` — no `tools`, no
 `functions`. aider's withholdable surface is the shell command and the URL scrape, which the gate
-really does refuse; but `custom-harness.mjs` disables the fixed id `WebSearch`, which matches
-nothing on this harness — so `disabled_tool_unused` would pass VACUOUSLY, as it already does for
-qwen, gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
-demonstrable; what is missing is a dimension that disables a tool the base under test actually
+really does refuse; but `custom-harness.mjs` disabled the fixed id `WebSearch`, which matches
+nothing on this harness — so `disabled_tool_unused` passed VACUOUSLY, as it also did for qwen,
+gemini and cline, whose catalogs carry no `WebSearch` either. The enforcement here is real and
+demonstrable; what was missing was a dimension that disables a tool the base under test actually
 lists.
+
+**Fixed 2026-10-03** (see "The disabled tool is the base's own" below). aider is the one base the
+table marks `null`: its catalog is a single tool, Shell, and the stamp task needs it, so the
+dimension says it cannot test the policy there instead of passing.
 
 
 ## aider × Google, the first paid column (2026-09-16)
@@ -1911,3 +1920,63 @@ gajae also names the served model itself, on every assistant message.
 - No custom-harness row and no plugin row. All five are in `custom-harness.mjs`'s BASES, so the
   dimension will cover them when it runs.
 - The family tour has not been run on any of them.
+
+## The disabled tool is the base's own, and the label on the instructions box is the runner's (2026-10-03)
+
+Three things the batch of five exposed, each a surface that read as working and was not.
+
+### The custom-harness dimension was disabling a tool eleven bases do not have
+
+`custom-harness.mjs` built every harness with `disabled_tools: ['WebSearch']` and judged the claim
+with `!tools.some((t) => /websearch/i.test(t))`. A tool id that matches nothing in a runtime is
+dropped on the way through and disables nothing, so on a base with no tool of that exact name
+`disabled_tool_unused` was VACUOUSLY true — a row passing a check that was not running, the same
+shape as the openhands column that reported 40/40 on a substitution check with no input.
+
+Eleven of the twenty bases were in that state: aider, codex, goose, openhands, pi and qwen/gemini/
+cline (the ones the 2026-09-19 and 2026-09-28 notes had already named), plus the five added on
+2026-10-02, whose ids are `web_search` / `websearch` — which the old regex would not have matched
+even where the tool existed.
+
+Now there is a per-base `DISABLED_TOOL` table, each entry read off that base's own `_BASE_CATALOG`
+entry and each a tool the stamp task does not need (nothing switches off a shell, a read or a
+write — that would fail the task rather than test the policy):
+
+| base | tool | base | tool |
+|---|---|---|---|
+| claude-code | `WebSearch` | kimi | `FetchURL` |
+| codex | `git` | cheetahclaws | `WebSearch` |
+| hermes | `web_search` | openhands | `Todo` |
+| pi | `edit` | mimo | `websearch` |
+| dsh | `web_search` | gajae | `web_search` |
+| opencode | `websearch` | jcode | `websearch` |
+| qwen | `web_fetch` | opensquilla | `web_search` |
+| gemini | `google_web_search` | nanobot | `web_search` |
+| cline | `fetch_web_content` | goose | `read_image` |
+| omp | `web_search` | **aider** | **null — not testable** |
+
+aider's catalog is one tool, Shell, and the task needs it, so its row reports that the policy is
+not testable on that base rather than passing. A vacuous pass is worse than an honest gap.
+
+The judge now compares whole names ignoring case and separators (`web_search`, `websearch` and
+`WebSearch` are one name; `search` does not match `search_sessions`), the row records WHICH tool it
+switched off, and `gateway/tests/test_matrix_disabled_tool.py` holds the table to `_BASE_CATALOG`
+so the next base whose ids drift fails there rather than quietly going vacuous.
+
+### The settings page named a file the runner does not write
+
+Registration point 14 requires the console's instruction-file label to agree with
+`_agent_doc_path`. Nothing checked it and it had drifted: the page labelled the box `AGENTS.md` for
+qwen and gemini while the runner writes `QWEN.md` and `GEMINI.md`. The instructions still reached
+the agent; the name on the box was wrong, which on this repo's terms is a defect rather than a nit.
+The label now comes from one exported map (`instructionFileLabel`), and
+`gateway/tests/test_instruction_file_label.py` holds it to `_agent_doc_path` for every base.
+
+### A CLI could say something about a turn and have it reach nobody
+
+The gateway's translator renders exactly two `system` subtypes and drops every other in silence, so
+a runner emitting a third was writing to a surface that did not exist. OpenSquilla reports
+"Provider context limit reached; compacting older context before retrying" as a progress event, and
+a person reading a turn that took minutes and lost its earlier context had no way to learn why.
+`system/notice` is now rendered as a note on the reply, beside `resume_lost` and `mcp_unavailable`;
+the runner bounds it and de-duplicates it (that warning repeats once per retry).

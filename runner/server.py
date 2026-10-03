@@ -7290,15 +7290,22 @@ def _opensquilla_to_claude(obj: dict, state: dict) -> list[dict]:
             state["_sq_error"] = str(obj.get("message") or "opensquilla error")[:1000]
             return []
         if kind == "warning":
-            # Kept on the record's state, NOT emitted. The gateway renders exactly two system
-            # subtypes — resume_lost and mcp_unavailable — and silently drops any other, so a
-            # `system/notice` event would be a surface that looks wired and is not: the warning
-            # would reach nobody while the code read as though it had. Its messages are worth
-            # showing ("Provider context limit reached; compacting older context before retrying"),
-            # so a gateway-side renderer for a generic CLI notice is a follow-up, not a thing to
-            # pretend into existence here. Meanwhile it is on the turn's state for the reason text.
-            state.setdefault("_sq_warnings", []).append(str(obj.get("message") or "")[:300])
-            return []
+            # Something the CLI said about how the turn is going, which is neither its answer nor a
+            # failure: "Provider context limit reached; compacting older context before retrying" is
+            # the one measured here. A person reading a turn that took minutes and lost its earlier
+            # context has no other way to learn why, so it becomes a `system/notice` — a subtype the
+            # gateway renders as a note on the reply (it renders resume_lost and mcp_unavailable the
+            # same way, and drops any subtype it does not know, so emitting one it did not render
+            # would be writing to a surface that does not exist).
+            #
+            # De-duplicated HERE rather than in the gateway: its compaction warning repeats once per
+            # retry, and three identical notes on one reply is noise, not information.
+            text = str(obj.get("message") or "").strip()[:300]
+            seen = state.setdefault("_sq_notices", [])
+            if not text or text in seen:
+                return []
+            seen.append(text)
+            return [{"type": "system", "subtype": "notice", "text": text}]
         return []
     if isinstance(obj.get("status"), str) and "session_key" in obj:
         state["_sq_final"] = obj

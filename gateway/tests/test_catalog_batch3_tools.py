@@ -80,3 +80,35 @@ def test_every_base_in_the_catalog_is_one_the_runner_can_execute():
         # Every id the picker offers has to be drivable by at least one wiring row, or the base is
         # a row in the console that cannot be connected to anything.
         assert any(b == base for _p, b in A._INTEGRATION_WIRING), base
+
+
+# ── the notice surface ────────────────────────────────────────────────────────────────────────
+# An unrecognised `system` subtype is dropped here in silence, so a runner that emits one is
+# writing to a surface that does not exist. `notice` is the third subtype this translator knows,
+# and it exists because opensquilla says things about a turn that are neither its answer nor a
+# failure — "Provider context limit reached; compacting older context before retrying" — and a
+# person reading a turn that took minutes and lost its earlier context has no other way to learn why.
+
+def test_a_cli_notice_is_rendered_as_a_note_on_the_reply():
+    out = A._blocks_from_canonical({"type": "system", "subtype": "notice",
+                                    "text": "Provider context limit reached; compacting."})
+    assert len(out) == 1
+    kind, text = out[0]
+    assert kind == "text"
+    assert "Provider context limit reached; compacting." in text
+    assert text.strip().startswith("_Note:")
+
+
+def test_an_empty_notice_renders_nothing():
+    assert A._blocks_from_canonical({"type": "system", "subtype": "notice", "text": ""}) == []
+    assert A._blocks_from_canonical({"type": "system", "subtype": "notice", "text": "   "}) == []
+
+
+def test_a_notice_is_bounded():
+    out = A._blocks_from_canonical({"type": "system", "subtype": "notice", "text": "x" * 5000})
+    assert len(out[0][1]) < 600
+
+
+def test_a_subtype_nobody_renders_still_produces_nothing():
+    # The reason the runner may not invent one: this is silent, not an error.
+    assert A._blocks_from_canonical({"type": "system", "subtype": "made_up", "text": "hi"}) == []
