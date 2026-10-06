@@ -25,6 +25,7 @@ from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa
                     _build_jcode, _build_mimo, _build_nanobot, _build_opensquilla,
                     _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
+                    _opensquilla_transcript,
                     _opensquilla_usage, _resume_lost, _write_skills)
 
 UP = "https://up.example/v1"
@@ -47,6 +48,8 @@ def _norm(fn, lines, model="gpt-5.4", cwd=""):
 # ── registration: the five places a missing row fails silently ────────────────────────────────
 
 def test_every_base_is_registered():
+    # gajae is in BACKENDS (the runner can execute it) but NOT in the gateway's catalogs, so the
+    # product never asks it to — gateway/tests/test_gajae_not_offered.py pins that and says why.
     for b in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
         assert b in BACKENDS, b
         assert BACKENDS[b]["providers"], b
@@ -616,3 +619,30 @@ def test_opensquilla_warning_becomes_a_notice_the_gateway_renders_and_repeats_on
     assert len(other) == 1 and other[0]["subtype"] == "notice"
     # and an empty one is not
     assert _opensquilla_to_claude({**w, "message": ""}, state) == []
+
+
+def test_opensquilla_channel_routing_directives_are_not_part_of_the_answer():
+    # MEASURED on the first live turn through the product: asked to reply with exactly READY, the
+    # record said "[[reply_to_current]]\nREADY". The directive is for OpenSquilla's channel
+    # adapters; the project strips it in the channel layer and in BOTH of its terminal renderers,
+    # but `opensquilla agent --json` strips neither. Left in, every scenario that recalls an exact
+    # word fails for a reason that has nothing to do with the model.
+    from server import _opensquilla_text
+    assert _opensquilla_text("[[reply_to_current]]\nREADY") == "READY"
+    assert _opensquilla_text("[reply_to: ops]\nhi there") == "hi there"      # the one-bracket spelling
+    assert _opensquilla_text("READY [[reply_to_current]]") == "READY"
+    assert _opensquilla_text("READY") == "READY"
+    # and nothing else in double brackets is touched
+    assert _opensquilla_text("see [[notes]] here") == "see [[notes]] here"
+
+
+def test_opensquilla_transcript_answer_has_the_directive_removed():
+    d = _ws()
+    base = pathlib.Path(d, ".harness", "opensquilla"); base.mkdir(parents=True)
+    (base / "transcript.jsonl").write_text(json.dumps(
+        {"type": "message", "message": {"role": "assistant",
+                                        "content": [{"type": "text", "text": "[[reply_to_current]]\nDONE"}]}}))
+    state = {"model": "gpt-5.4", "final": "", "cwd": d}
+    evs = _opensquilla_transcript(state)
+    assert state["final"] == "DONE"
+    assert "reply_to_current" not in json.dumps(evs)

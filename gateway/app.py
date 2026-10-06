@@ -1282,13 +1282,6 @@ _INTEGRATION_WIRING: dict[tuple[str, str], str] = {
     ("tokenrouter", "mimo"): "tokenrouter",    ("vercel", "mimo"): "tokenrouter",
     ("llmtr", "mimo"): "tokenrouter",          ("custom", "mimo"): "tokenrouter",
     ("google", "mimo"): "openai-api",          ("harnessrouter", "mimo"): "tokenrouter",
-    # gajae is pi's lineage and its models.yml takes pi's own `api` values, so it is wired as pi is.
-    ("anthropic", "gajae"): "anthropic",       ("openai", "gajae"): "openai",
-    ("azure-foundry", "gajae"): "azure",
-    ("openrouter", "gajae"): "openrouter",
-    ("tokenrouter", "gajae"): "tokenrouter",   ("vercel", "gajae"): "tokenrouter",
-    ("llmtr", "gajae"): "tokenrouter",         ("custom", "gajae"): "tokenrouter",
-    ("google", "gajae"): "openai-api",         ("harnessrouter", "gajae"): "tokenrouter",
     # jcode, opensquilla and nanobot each speak ONE OpenAI shape, chat/completions, through the
     # loopback relay, which is exactly cline's and goose's reach, so they are wired as those are.
     # jcode and opensquilla also have an Anthropic-Messages provider, used only for a connection
@@ -5004,16 +4997,15 @@ _CUSTOM_FORMAT_BACKENDS = {
     # Anthropic endpoint cannot cache at all, which cost a benchmark 6 to 8 times the Claude Code
     # price for the same task on goose and OpenHands.
     # cheetahclaws: OpenAI Chat Completions only (its `custom/` client), so the openai set alone.
-    # This batch: all five drive a custom OpenAI endpoint. mimo and gajae also take a custom
-    # ANTHROPIC endpoint (mimo through @ai-sdk/anthropic, gajae through its models.yml
-    # `anthropic-messages` api), which is why those two are in both sets; jcode's and
-    # opensquilla's Messages providers exist but are reserved for a connection that IS Anthropic,
-    # so a custom integration declaring the anthropic format would be offered a path the runner
-    # does not take for it — unlisted rather than nearly true.
+    # This batch: the four offered bases all drive a custom OpenAI endpoint. mimo also takes a
+    # custom ANTHROPIC endpoint (through @ai-sdk/anthropic), which is why it is in both sets;
+    # jcode's and opensquilla's Messages providers exist but are reserved for a connection that IS
+    # Anthropic, so a custom integration declaring the anthropic format would be offered a path the
+    # runner does not take for it — unlisted rather than nearly true.
     "openai": {"hermes", "opencode", "pi", "dsh", "qwen", "cline", "omp", "goose", "kimi", "aider",
-               "openhands", "cheetahclaws", "mimo", "gajae", "jcode", "opensquilla", "nanobot"},
+               "openhands", "cheetahclaws", "mimo", "jcode", "opensquilla", "nanobot"},
     "anthropic": {"claude", "opencode", "pi", "dsh", "omp", "goose", "hermes", "openhands",
-                  "mimo", "gajae"},
+                  "mimo"},
     # The OpenAI Responses API: what codex speaks, and only codex among the agent CLIs here.
     "responses": {"codex"},
 }
@@ -6782,9 +6774,27 @@ _MODEL_CATALOG["omp"]["models"] = list(_MODEL_CATALOG["pi"]["models"])   # pi's 
 # mimo is an opencode FORK that kept opencode's provider model — the config names an ai-sdk package
 # and a baseURL, so it reaches what opencode reaches, Responses ids included.
 _MODEL_CATALOG["mimo"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["opencode"]["models"])}
-# gajae is pi's lineage and its models.yml takes pi's own `api` values (openai-completions,
-# openai-responses, anthropic-messages), so it reaches what pi reaches.
-_MODEL_CATALOG["gajae"] = {"default": "gpt-5.4", "models": list(_MODEL_CATALOG["pi"]["models"])}
+# ── gajae (Gajae-Code) is implemented and NOT offered ─────────────────────────────────────────
+# It has no entry here, none in _BASE_CATALOG, and no wiring row, so this server neither lists it,
+# routes it (_SUPPORTED_BASES and _HID_PREFIX_RE are derived from _BASE_CATALOG) nor runs it. The
+# runner's implementation stays in place — _build_gajae, _gajae_to_claude, their tests and their
+# captured fixtures — because the base WORKS; what stops it is this product's own write-wall, and
+# that is a decision to revisit rather than a defect to fix.
+#
+# MEASURED (2026-10-03, on a real instance, both directions of the switch):
+#   gjc's native lock helper walks from / down to the path it is locking and opens EVERY ancestor
+#   with O_RDONLY|O_DIRECTORY|O_NOFOLLOW (pi-natives, open_parent_no_follow), which needs READ on
+#   each ancestor rather than traverse. docker/entrypoint.sh sets /data and /data/workspaces to
+#   751 — "traversable by sessions, neither listable nor writable" — so a session uid gets EACCES,
+#   the addon reports io_error, and the turn dies before its first model call.
+#   With those two directories at 755 a real turn completed in 4.6 s; put back to 751 it failed
+#   again with the same error. Both sides are defending the same thing from opposite ends: gjc
+#   refuses to trust path resolution for a lock, and this product makes the ancestors unreadable.
+#
+# To offer it: relax those two modes (which gives up "neither listable", not "nor writable"), then
+# restore this entry, the _BASE_CATALOG entry, the _INTEGRATION_WIRING rows and the
+# _CUSTOM_FORMAT_BACKENDS membership. gateway/tests/test_gajae_not_offered.py pins the current
+# state so a half-restore cannot pass unnoticed. docs/support-matrix-notes.md has the full record.
 # jcode, opensquilla and nanobot each speak ONE OpenAI shape — chat/completions — through the
 # loopback relay, which is kimi's reach exactly, so they take kimi's list and are in
 # CHAT_ONLY_BACKENDS below. (jcode and opensquilla also have an Anthropic-Messages provider, used
@@ -15509,35 +15519,6 @@ _BASE_CATALOG: dict[str, dict] = {
         # "hard" for opencode's reason, which the fork did not change: a `permission.<key>: "deny"`
         # removes the tool rather than discouraging it. The honest limit every shell-bearing base
         # has: denying `edit` does not stop a file being written through `bash`.
-        "tool_enforcement": "hard",
-    },
-    "gajae": {
-        "label": "Gajae-Code", "backend": "gajae", "status": "ready",
-        "system_prompt": ("You are Gajae-Code, an autonomous coding agent. You work on a real git "
-                          "workspace with shell and file access, reading and editing files and "
-                          "running commands to complete the task end to end."),
-        # Read off the pinned 0.18.5's own tools/descriptors.ts `names` table and NOT off `--help`,
-        # whose list is stale (it advertises a `notebook` tool this build does not register). Pinned
-        # equal to the runner's ALL_GAJAE_TOOLS by gateway/tests/test_catalog_batch3_tools.py, so a
-        # toggle the console shows always names a tool the model was really offered. `computer` is
-        # macOS-arm64 only and is therefore not listed; the three hidden ids (yield,
-        # report_finding, resolve) are the CLI's own plumbing and are not offered either.
-        "tools": [("bash", "Shell"), ("read", "File Read"), ("write", "File Write"),
-                  ("edit", "Edit"), ("search", "Search"), ("find", "Find"), ("lsp", "LSP"),
-                  ("python", "Python"), ("eval", "Eval"), ("calc", "Calc"), ("ssh", "SSH"),
-                  ("github", "GitHub"), ("browser", "Browser"), ("ast_grep", "AST Search"),
-                  ("ast_edit", "AST Edit"), ("render_mermaid", "Render Mermaid"),
-                  ("debug", "Debug"), ("bisect", "Bisect"), ("checkpoint", "Checkpoint"),
-                  ("rewind", "Rewind"), ("task", "Subagent"), ("subagent", "Subagent Manage"),
-                  ("job", "Background Job"), ("monitor", "Monitor"), ("cron", "Cron"),
-                  ("recipe", "Recipe"), ("irc", "Agent Message"), ("todo_write", "Todo"),
-                  ("web_search", "Web Search"), ("telegram_send", "Telegram Send"),
-                  ("skill", "Skill"), ("skill_discovery", "Skill Discovery"),
-                  ("search_tool_bm25", "Tool Search"), ("goal", "Goal"), ("ask", "Question"),
-                  ("move_session", "Move Session")],
-        # "hard", and measured: --tools is an allowlist the CLI applies before the schema is built,
-        # and with `write` left out of it the model's own account of its tools came back without it.
-        # Unlike omp, an unknown name cannot kill the turn — cli/args.ts warns and drops it.
         "tool_enforcement": "hard",
     },
     "jcode": {

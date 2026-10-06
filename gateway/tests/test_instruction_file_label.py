@@ -63,7 +63,7 @@ def test_the_page_does_not_carry_a_second_copy_of_the_list():
 
 def test_the_bases_this_batch_added_are_covered():
     labels = _label_map()
-    for base in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+    for base in ("mimo", "jcode", "opensquilla", "nanobot"):
         assert labels[base] == "AGENTS.md", base
 
 

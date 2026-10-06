@@ -14,7 +14,7 @@ import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 
 const BASE = process.env.BASE;
-const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,cheetahclaws,mimo,gajae,jcode,opensquilla,nanobot').split(',');   // every built-in chat harness, all twenty (systemone runs decision models only)
+const BASES = (process.env.BASES || 'codex,claude-code,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,cheetahclaws,mimo,jcode,opensquilla,nanobot').split(',');   // every built-in chat harness, all nineteen (systemone runs decision models only)
 const RESULTS = process.env.RESULTS || 'results-custom.json';
 // A harness's other kind of tool is an MCP server. A self-contained instance hosts only the
 // database and media servers, one needing a database and the other costing real money per call, so
@@ -71,7 +71,6 @@ const DISABLED_TOOL = {
   openhands: 'Todo',             // Shell/Edit/Todo
   cheetahclaws: 'WebSearch',
   mimo: 'websearch',
-  gajae: 'web_search',
   jcode: 'websearch',
   opensquilla: 'web_search',
   nanobot: 'web_search',

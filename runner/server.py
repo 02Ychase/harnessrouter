@@ -7172,6 +7172,26 @@ OPENSQUILLA_BIN = os.environ.get("HR_OPENSQUILLA_BIN",
                                  "/data/agent-tools/opensquilla-venv/bin/opensquilla")
 
 
+# The chat-routing directives OpenSquilla's models embed for its channel adapters:
+# `[[reply_to_current]]`, `[[reply_to: <target>]]`, and the one-bracket spelling a model that
+# dropped a pair still means. The project strips them in the channel layer AND in both of its
+# terminal renderers — "terminal surfaces render the raw stream, so without this filter the tag
+# leaks into the transcript as literal text" — but `opensquilla agent --json` strips neither, so
+# without this the tag is part of the answer. Measured on the first live turn: asked to reply with
+# exactly READY, the record said "[[reply_to_current]]\nREADY", which is a scenario that recalls an
+# exact word failing for a reason that has nothing to do with the model. The pattern and what goes
+# with it (trailing spaces and one newline) are the project's own, from
+# cli/tui/backend/directives.py.
+_SQ_DIRECTIVE = re.compile(
+    r"(?:\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]*)\s*\]\]"
+    r"|(?<!\[)\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]*)\s*\](?!\]))[ \t]*\r?\n?")
+
+
+def _opensquilla_text(s: str) -> str:
+    """One assistant text block, with the channel-routing directives taken out."""
+    return _SQ_DIRECTIVE.sub("", s or "").strip()
+
+
 def _opensquilla_paths(cwd: str) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     """(state dir, transcript, usage file) — all under .harness/, so all checkpointed and none of
     them reported to the user as something their task produced."""
@@ -7240,8 +7260,8 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
         role = msg.get("role")
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
         if role == "assistant":
-            text = "\n".join(c.get("text") or "" for c in content
-                             if isinstance(c, dict) and c.get("type") == "text")
+            text = _opensquilla_text("\n".join(c.get("text") or "" for c in content
+                                               if isinstance(c, dict) and c.get("type") == "text"))
             if text.strip():
                 # `final` is the LAST assistant text, which is why the final answer is taken from
                 # here and NOT from the stdout object's `text`: that field concatenates the whole

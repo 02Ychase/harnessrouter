@@ -204,12 +204,15 @@ export HOSTNAME=0.0.0.0
 TOOLS="$DATA_DIR/agent-tools"
 export PATH="$TOOLS/bin:$PATH"
 export NODE_PATH="$TOOLS/lib/node_modules"
-# The five added in this batch are in the DEFAULT set rather than opt-in, for the reason
+# Four of the five added in this batch are in the DEFAULT set rather than opt-in, for the reason
 # agentzero's PR settled: the console lists every base in the catalog, so a base the operator
 # did not opt into is a row that fails on its first turn with no explanation. Disk is the
-# trade — jcode is a ~127 MB static Rust binary, gjc a ~100 MB one, and the two Python bases
-# bring their own venvs — and an operator who wants them out sets HR_BACKENDS.
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws,mimo,gajae,jcode,opensquilla,nanobot}"
+# trade — jcode is a ~127 MB static Rust binary and the two Python bases bring their own venvs —
+# and an operator who wants them out sets HR_BACKENDS.
+#
+# gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
+# this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -654,6 +657,9 @@ install_mimo() {
 # GitHub releases WITH a checksum file beside them (gajae-release-binaries.sha256), so the bytes are
 # compared against upstream's own list rather than against a digest we computed. NOT the npm
 # package `gajae-code`: its bin shim is `#!/usr/bin/env bun`, and bun is not in this image.
+# NOT INSTALLED TODAY: `wanted gajae` is false unless an operator names it, and the gateway offers
+# no gajae base, so this runs for nobody. Kept against the day the write-wall decision is revisited
+# — the integration itself works; see the note in gateway/app.py above _MODEL_CATALOG["mimo"].
 install_gajae() {
   case "$(uname -m)" in
     x86_64)        gj_arch="x64" ;;

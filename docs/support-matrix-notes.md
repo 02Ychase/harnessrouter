@@ -1773,11 +1773,15 @@ same twelve bases as this one; its comment keeps the TokenRouter and direct-Open
 organizations that bring such a key, the rule the self-hosted catalog states.
 
 
-## Five bases added together: mimo, gajae, jcode, opensquilla, nanobot (2026-10-02)
+## Five bases added together, four of them offered (2026-10-02/06)
 
 MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT), jcode
 (1jehuang/jcode, MIT), OpenSquilla (TokenRhythm/opensquilla, Apache-2.0) and nanobot
 (HKUDS/nanobot, MIT), as the seventeenth to twenty-first bases.
+
+**gajae is implemented and NOT OFFERED**: its CLI cannot run under this product's session
+write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
+walks its ancestors" below. The other four are offered.
 
 **NO SUPPORT-MATRIX COLUMN HAS RUN ON ANY OF THEM.** Everything below is behaviour measured
 against the pinned build on a developer machine — flags, event schema, failure reporting, resume,
@@ -1980,3 +1984,49 @@ a runner emitting a third was writing to a surface that did not exist. OpenSquil
 a person reading a turn that took minutes and lost its earlier context had no way to learn why.
 `system/notice` is now rendered as a note on the reply, beside `resume_lost` and `mcp_unavailable`;
 the runner bounds it and de-duplicates it (that warning repeats once per retry).
+
+## gajae: the write-wall and a lock that walks its ancestors (2026-10-03, decided 2026-10-06)
+
+Every gajae turn through the product died before its first model call:
+
+    [Uncaught Exception] Error: Failed to snapshot staged file lock: io_error.
+
+**The cause, with evidence at each link.**
+
+1. gjc's native lock helper `open_parent_no_follow` (`crates/pi-natives/src/path_identity.rs`)
+   hardens the lock against symlink swaps by refusing to trust path resolution: it walks from `/`
+   down to the path it is locking and opens EVERY ancestor with
+   `O_RDONLY|O_DIRECTORY|O_NOFOLLOW`. On a directory that needs **read**, not traverse.
+2. `docker/entrypoint.sh` sets `/data` and `/data/workspaces` to `751` — its own comment:
+   "traversable by sessions, neither listable nor writable".
+3. Measured in the container: as a session uid, `open("/data", O_RDONLY|O_DIRECTORY)` is EACCES;
+   as the product user, which owns it, it succeeds.
+4. The addon maps EACCES to `io_error`, `acquireFileLock` throws, nothing catches it.
+5. **Positive control**: the same binary, the same uid, the same flags, in a directory whose only
+   ancestor is `/` (0755) — no crash, and the run reaches the provider.
+6. **Narrowing**: cwd left under `/data` (unreadable ancestors) with only the agent dir and the
+   session dir moved to a readable path — works. So it is specifically the directories gjc locks,
+   both of which the runner names (`GJC_CODING_AGENT_DIR`, `--session-dir`).
+7. **Both directions of the switch, on a real turn through the API**: at `751` the turn failed with
+   that error; at `755` it completed in 4.6 s answering correctly with
+   `served_model = openai/gpt-5.4`; back at `751` it failed again. The modes were restored.
+
+Neither side is wrong. gjc assumes it may be running where an attacker can write and verifies every
+ancestor itself; this product makes those ancestors unwritable so nobody can, and in doing so makes
+them unreadable, which is what gjc's verification needs.
+
+**Decision (the user's, 2026-10-06): do not weaken the wall.** gajae is removed from everything
+that offers, routes or installs it — `_MODEL_CATALOG`, `_BASE_CATALOG`, `_INTEGRATION_WIRING`,
+`_CUSTOM_FORMAT_BACKENDS`, the console's `OOB` and logo map, the default `HR_BACKENDS`, and both
+measurement dimensions' base lists. The runner's implementation stays (`_build_gajae`,
+`_gajae_to_claude`, 13 tests and two captured fixtures) because the base works and the blocker is a
+product decision; `gateway/tests/test_gajae_not_offered.py` pins every one of those surfaces so a
+half-restore — listed but not routable, or routable but not installed — cannot pass unnoticed.
+
+**What it would take to offer it.** Relax `/data` and `/data/workspaces` to `755`, then restore the
+catalog entries, the wiring rows and the `_CUSTOM_FORMAT_BACKENDS` membership. What that gives up is
+"neither listable", not "nor writable": a session uid could then enumerate other session ids and
+environment names. It could not read them — `control.db` and `graph.db` are `0600` and `blobs/` is
+`0700`, and a session uid already has traverse, so file contents are governed by each file's own
+mode either way. The half that stops a session renaming or replacing another session's directory
+(which needs write on the parent, not on the target) is untouched by that change.

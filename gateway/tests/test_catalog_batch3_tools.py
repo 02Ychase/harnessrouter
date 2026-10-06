@@ -5,13 +5,12 @@ disables nothing while the console reports it as off — the overstatement UHP s
 and the whole of what `tool_enforcement: "hard"` claims. These tests hold each catalog to the
 runner's own measured list, which is also where the measurement is recorded:
 
-  gajae   ALL_GAJAE_TOOLS   — tools/descriptors.ts's `names` table on gjc 0.18.5, NOT `--help`,
-                              whose list is stale (it advertises a `notebook` this build lacks)
   jcode   ALL_JCODE_TOOLS   — the model's own account of its tools on v0.90.0, with
                               --disabled-tools write proving the switch is enforcement
   nanobot ALL_NANOBOT_TOOLS — the 22 its loop logs at start-up on 0.3.5
 
-mimo and opensquilla are checked differently and for stated reasons, below.
+mimo and opensquilla are checked differently and for stated reasons, below. gajae is checked by
+test_gajae_not_offered.py instead: it is implemented but deliberately not offered.
 """
 import os
 import pathlib
@@ -27,16 +26,6 @@ from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa
 
 def _offered(base: str) -> set:
     return {tid for tid, _label in A._BASE_CATALOG[base]["tools"]}
-
-
-def test_gajae_offers_only_tools_the_allowlist_can_withhold():
-    offered = _offered("gajae")
-    # `computer` is in the runtime's table but is macOS-arm64 only, so it is never present in the
-    # image and is deliberately not offered; the three hidden ids are the CLI's own plumbing.
-    extra = offered - ALL_GAJAE_TOOLS
-    assert not extra, f"offered but not a gjc tool: {extra}"
-    missing = ALL_GAJAE_TOOLS - offered - {"computer"}
-    assert not missing, f"a gjc tool with no console toggle: {missing}"
 
 
 def test_jcode_offers_only_tools_the_deny_list_can_withhold():
@@ -68,12 +57,12 @@ def test_opensquilla_does_not_claim_an_enforcement_it_has_not_got():
 
 
 def test_the_four_with_a_real_switch_claim_hard():
-    for base in ("mimo", "gajae", "jcode", "nanobot"):
+    for base in ("mimo", "jcode", "nanobot"):
         assert A._BASE_CATALOG[base]["tool_enforcement"] == "hard", base
 
 
 def test_every_base_in_the_catalog_is_one_the_runner_can_execute():
-    for base in ("mimo", "gajae", "jcode", "opensquilla", "nanobot"):
+    for base in ("mimo", "jcode", "opensquilla", "nanobot"):
         assert base in A._BASE_CATALOG
         assert A._BASE_CATALOG[base]["backend"] in BACKENDS
         assert base in A._MODEL_CATALOG and A._MODEL_CATALOG[base]["models"]
