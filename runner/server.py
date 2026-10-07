@@ -7761,7 +7761,7 @@ def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: st
     }
     mcp = _nanobot_mcp(mcp_servers)
     if mcp:
-        cfg["mcp"] = mcp
+        cfg["tools"] = {"mcpServers": mcp}
     cfg_dir.mkdir(parents=True, exist_ok=True)
     path = cfg_dir / "config.json"
     path.write_text(json.dumps(cfg, indent=2))
@@ -7769,8 +7769,18 @@ def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: st
 
 
 def _nanobot_mcp(servers: list[dict] | None) -> dict:
-    """nanobot's `mcp.servers` map, in the shape MCPProvider.from_config reads: a name to
-    {command,args,env} for stdio or {url,headers} for a remote server."""
+    """nanobot's `tools.mcpServers` map: a name to {command,args,env} for stdio or {url,headers}
+    for a remote one. The transport is INFERRED by nanobot from the url — a path ending in /sse is
+    sse, anything else streamable HTTP (agent/tools/mcp.py connect_mcp_servers) — so no `type` is
+    sent and nanobot is in neither half of _BRIDGED_TRANSPORTS.
+
+    The KEY PATH is the whole of what was wrong here. This wrote a top-level `mcp: {servers: …}`,
+    which nanobot's Config forbids outright: its top level is agents/api/channels/gateway/
+    model_presets/providers/tools/transcription with extra="forbid", so every turn on a harness
+    carrying ANY MCP server died before the first model call with "Invalid configuration … mcp:
+    Unknown setting." Measured by the custom-harness dimension on 2026-10-07; nothing else could
+    have seen it, because no test exercised this function's output against nanobot's own schema and
+    the five routing scenarios never attach a server."""
     out: dict = {}
     for i, sv in enumerate(servers or []):
         if not isinstance(sv, dict):
@@ -7792,7 +7802,7 @@ def _nanobot_mcp(servers: list[dict] | None) -> dict:
         else:
             continue
         out[name] = entry
-    return {"servers": out} if out else {}
+    return out
 
 
 def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,

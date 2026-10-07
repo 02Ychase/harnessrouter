@@ -30,13 +30,32 @@ const MCP_NAME = process.env.MCP_NAME || 'deepwiki';
 // the write's result (measured 2026-09-08 on omp 18.1.13: two writes to
 // xd://mcp__deepwiki_read_wiki_structure answered the wiki structure). A judge that reads only
 // the name sees `write` and calls a served MCP turn a miss, so the call's arguments are read too.
+// mimo dispatches the same way through a DIFFERENT door: its `exec` tool is a JavaScript sandbox
+// with the tool registry in scope, so a served MCP turn is two exec calls — one that filters
+// ALL_TOOLS for the server, one that invokes the tool it found by name (measured 2026-10-07 on
+// mimo 0.1.15: `const toolName = 'deepwiki_ask_wiki_question'` and the answer named a real topic
+// from that wiki). Read only the name and that is `exec, exec`, which is what made a PASSING base
+// the dimension's only MCP failure.
+//
+// The discriminator is dispatch versus HTTP. A call whose arguments name one of the server's TOOLS
+// went through the harness's MCP wiring; a call that carries the server's URL did not — a shell that
+// curls the endpoint reaches the same data while proving nothing about the declared server, and it
+// must keep counting as a miss.
+// No word boundary before the bare names: the tool mimo dispatched was `deepwiki_ask_wiki_question`,
+// and a boundary that excludes `_` does not match a name the server's own prefix is glued to.
+const MCP_TOOL_NAMES = /mcp__[A-Za-z0-9_]+|read_wiki_structure|read_wiki_contents|ask_wiki_question/;
 const toolLabel = (t) => {
   const name = String((t && t.name) || '');
   const args = typeof (t && t.arguments) === 'string' ? t.arguments : JSON.stringify((t && t.arguments) || '');
   const xd = /xd:\/\/(mcp__[A-Za-z0-9_]+)/.exec(args || '');
-  return name === 'write' && xd ? xd[0] : name;
+  if (name === 'write' && xd) return xd[0];
+  if (name !== 'write' && args && !args.includes(MCP_URL)) {
+    const dispatched = MCP_TOOL_NAMES.exec(args);
+    if (dispatched) return `${name}:${dispatched[0]}`;
+  }
+  return name;
 };
-const MCP_TOOL = new RegExp(`(^|[^a-z])mcp([^a-z]|$)|${MCP_NAME}|read_wiki_structure|read_wiki_contents|ask_question`, 'i');
+const MCP_TOOL = new RegExp(`(^|[^a-z])mcp([^a-z]|$)|${MCP_NAME}|read_wiki_structure|read_wiki_contents|ask_wiki_question`, 'i');
 
 // THE TOOL THIS DIMENSION SWITCHES OFF, PER BASE — and it has to be a tool that base actually has.
 //
@@ -251,6 +270,10 @@ try {
         rec.mcp_status = mlast && mlast.status;
         rec.mcp_tools = mtools;
         rec.mcp_called = mtools.some((t) => MCP_TOOL.test(t));
+        // The answer, kept in the record although the check above does not read it: this half judges
+        // on the tool CALL, and a reader who doubts a row needs the thing only that server could
+        // have said. mimo's passing row answers "Everything Server", which is in that wiki.
+        rec.mcp_answer = String((mlast && mlast.assistant) || '').slice(-300);
         rec.mcp_error = String((mlast && (mlast.error || mlast.incomplete_reason)) || '').slice(0, 200);
       } else if (MCP_URL !== 'off' && !mcpUp) {
         rec.mcp_called = null; rec.mcp_error = 'skipped: the public MCP server was unreachable';

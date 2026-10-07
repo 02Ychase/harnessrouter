@@ -784,3 +784,50 @@ def test_a_produced_file_is_named_the_way_the_agent_named_it():
     assert {f["path"] for f in server._produced_list(d)} == {"workspace/report.md"}, (
         "the raw shape: git runs on the session dir")
     assert {f["path"] for f in _produced_visible(d)} == {"report.md"}
+
+
+# ── nanobot's MCP config ────────────────────────────────────────────────────────────────
+# Found by the custom-harness dimension on 2026-10-07, and it could not have been found anywhere
+# else: nothing exercised this function's OUTPUT against nanobot's own schema, and the five routing
+# scenarios never attach a server. Every turn on a harness carrying ANY MCP server died before the
+# first model call — including the turn that was only supposed to report a build stamp, because the
+# config is invalid as a whole.
+
+def _nano_cfg(servers):
+    d, env = _ws(), {}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                   mcp_servers=servers)
+    return json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())
+
+
+# nanobot.config.Config's top level, read off the installed package (0.3.5), with extra="forbid":
+# anything else is "Unknown setting." and the whole config is rejected.
+NANOBOT_TOP = {"agents", "api", "channels", "gateway", "model_presets", "providers", "tools",
+               "transcription"}
+
+
+def test_the_config_uses_only_keys_nanobots_own_schema_declares():
+    cfg = _nano_cfg([{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp"}])
+    assert set(cfg) <= NANOBOT_TOP, f"extra='forbid' rejects the whole file: {set(cfg) - NANOBOT_TOP}"
+    assert "mcp" not in cfg, "this was the defect: a top-level mcp key, which nanobot forbids"
+
+
+def test_a_remote_server_lands_at_tools_mcpServers_with_no_type():
+    # the transport is nanobot's own inference: a url path ending in /sse is sse, anything else
+    # streamable HTTP (agent/tools/mcp.py), which is why nanobot is in neither half of
+    # _BRIDGED_TRANSPORTS and why no type is sent.
+    cfg = _nano_cfg([{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp"}])
+    sv = cfg["tools"]["mcpServers"]["deepwiki"]
+    assert sv == {"url": "https://mcp.deepwiki.com/mcp"}
+
+
+def test_a_stdio_server_keeps_command_args_env():
+    cfg = _nano_cfg([{"name": "probe", "command": ["python3", "-u", "s.py"], "args": ["--x"],
+                      "env": {"K": "v"}}])
+    assert cfg["tools"]["mcpServers"]["probe"] == {
+        "command": "python3", "args": ["-u", "s.py", "--x"], "env": {"K": "v"}}
+
+
+def test_no_servers_means_no_tools_section_at_all():
+    cfg = _nano_cfg([])
+    assert "tools" not in cfg and "mcp" not in cfg
