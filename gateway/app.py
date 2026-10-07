@@ -9286,6 +9286,63 @@ def _ws_visible(path: str) -> bool:
     return not any(path.startswith(p) or f"/{p}" in path for p in _WS_HIDE_PREFIXES)
 
 
+# The checkpoint tarball is the session DIRECTORY, which is not always the directory the agent
+# works in: nanobot's loader refuses a session store inside the agent's workspace, so that base
+# keeps its store at the session root and works one level down (_NANOBOT_WS in the runner). Reading
+# the tar straight through therefore showed a nanobot session as 30 files under a `workspace/`
+# prefix the user never typed — its three built-in skill bundles and its instruction file among
+# them — on the share page, in the full files listing, in the download-all zip, and to the kit
+# route that resolves an app's own file BY PATH (a kit asking for deck.json would not have found
+# it). The runner already writes both facts INTO the checkpoint, so this reads them back rather
+# than keeping a second list in the gateway: `.harness/agent-subdir` names the agent's directory
+# and `.git/info/exclude` carries the base's own machinery patterns (git status honours the same
+# file, which is what keeps the produced-files list clean).
+_WS_SUBDIR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _ws_rules(tf) -> tuple[str, tuple[str, ...]]:
+    def _member(name: str) -> str:
+        for n in (f"./{name}", name):
+            try:
+                m = tf.getmember(n)
+            except KeyError:
+                continue
+            if m.isreg() and m.size <= 64 * 1024:
+                f = tf.extractfile(m)
+                if f is not None:
+                    return f.read().decode(errors="replace")
+        return ""
+    # ONE plain directory name, checked before any stripping: "/etc" stripped of its slashes
+    # would have read as the name "etc", and a value this does not recognise must mean "no subdir"
+    # rather than some other directory.
+    sub = _member(".harness/agent-subdir").strip()
+    if not _WS_SUBDIR_RE.fullmatch(sub):
+        sub = ""
+    pats = tuple(l.strip() for l in _member(".git/info/exclude").splitlines()
+                 if l.strip() and not l.startswith("#"))
+    return sub, pats
+
+
+def _ws_view(path: str, sub: str, pats: tuple[str, ...]) -> str | None:
+    """The tar member's path as the USER sees it, or None when it is not the user's file.
+
+    The base's own exclude patterns are matched against the path as GIT sees it — relative to the
+    session directory — because that is the file git reads them from; the prefix comes off after."""
+    for q in pats:
+        if path == q or (q.endswith("/") and path.startswith(q)):
+            return None
+    if sub:
+        if not path.startswith(f"{sub}/"):
+            return None               # outside the agent's directory is the runner's own state
+        path = path[len(sub) + 1:]
+    return path if _ws_visible(path) else None
+
+
+def _ws_member(path: str, sub: str) -> str:
+    """The inverse: where that user path lives inside the tar."""
+    return f"{sub}/{path}" if sub else path
+
+
 def _wf_id(path: str) -> str:
     return "wf_" + base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
 
@@ -9386,11 +9443,13 @@ async def _ws_files(sid: str) -> dict[str, bytes] | None:
     out: dict[str, bytes] = {}
     total = 0
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             if m.size > _WS_FILE_CAP or total + m.size > _WS_TOTAL_CAP:
                 continue                       # oversized: served via the single-member fallback
@@ -9530,7 +9589,9 @@ async def _container_file_bytes(container_id: str, file_id: str) -> tuple[bytes,
         if tf is None:
             return None
         with tf:
-            for name in (f"./{path}", path):
+            sub, _pats = _ws_rules(tf)
+            member = _ws_member(path, sub)
+            for name in (f"./{member}", member):
                 try:
                     m = tf.getmember(name)
                 except KeyError:
@@ -9599,11 +9660,13 @@ async def session_workspace_files(sid: str, request: Request, changed: bool = Fa
     cfile_by_name = await _cfile_by_name(sid)
     files = []
     with tf:
+        sub, pats = _ws_rules(tf)
         for m in tf.getmembers():
             if not m.isreg():
                 continue
             path = m.name[2:] if m.name.startswith("./") else m.name
-            if not _ws_visible(path):
+            path = _ws_view(path, sub, pats)
+            if path is None:
                 continue
             fid = cfile_by_name.get(path) or _wf_id(path)
             files.append({"object": "file", "id": fid, "container_id": sid,
@@ -9701,11 +9764,13 @@ async def session_files_archive(sid: str, request: Request, changed: bool = Fals
                     # turn relays, and health probes keep flowing).
                     n, tot = 0, 0
                     with tf:
+                        sub, pats = _ws_rules(tf)
                         for m in tf.getmembers():
                             if not m.isreg():
                                 continue
                             path = m.name[2:] if m.name.startswith("./") else m.name
-                            if not _ws_visible(path) or path.lstrip("/") in seen:
+                            path = _ws_view(path, sub, pats)
+                            if path is None or path.lstrip("/") in seen:
                                 continue
                             tot += m.size
                             if tot > _ARCHIVE_MAX_BYTES:

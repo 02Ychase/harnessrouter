@@ -1838,10 +1838,29 @@ works, and matrix rules 1 and 3 were not exercised at all. The catalogs say so a
   own conversation. The conversation still has to ride the checkpoint, which is a tar of the
   session directory, so the sessions root has to be inside the session and outside the workspace:
   the only shape that satisfies both is config (and therefore sessions) in `.harness/nanobot/` with
-  the agent's workspace one level down, at `<session>/workspace`. This base's deliverables
-  therefore arrive as `workspace/<name>`, and its AGENTS.md and skills live there too. The driver
-  also chdirs into it, so a shell that writes a relative path cannot land a level above what the
-  model was told it has — Agent Zero's artifact failures were exactly that.
+  the agent's workspace one level down, at `<session>/workspace`. Its AGENTS.md and skills live
+  there too, and the driver chdirs into it, so a shell that writes a relative path cannot land a
+  level above what the model was told it has — Agent Zero's artifact failures were exactly that.
+
+  The nesting STAYS; what changed is that it no longer reaches the user, because a session's file
+  root and the agent's cwd being different directories broke three things. Measured on a live
+  instance with a flat-layout base as the control in the same run:
+    1. a file written through `PUT /v1/sessions/{sid}/files` landed at the session root and the
+       agent answered "there is no notes.txt in the working directory", while the control read it.
+       That route is how an app owns state the agent also edits (the slides kit's deck.json), and
+       caller attachments land the same way. Both run before a backend is built, so neither can know
+       a base nests: `_adopt_into` moves root-level files into the agent's workspace at the start of
+       every turn, keeping back only what `/produced` already excludes.
+    2. deliverables came back as `workspace/<name>`, a directory the user never typed.
+       `_produced_visible` strips it where the cards and their download both resolve, and GET /file
+       tries the agent's directory then the session root.
+    3. the CHECKPOINT readers — share page, full file listing, download-all zip, and the kit route
+       that resolves a file by path — showed 30 files under that prefix, machinery included. The
+       runner writes `.harness/agent-subdir` and `.git/info/exclude` into the checkpoint and the
+       gateway reads them back (`_ws_rules`/`_ws_view`), so one source serves both sides rather than
+       a second exclusion list in the gateway.
+  An earlier version of this file called the prefix unfixable. That was read off the constraint
+  rather than measured, and only the constraint on the session store was real.
   **Found by running the runner's real argv against the real package**, not by any test: the
   driver's own fake could not have seen it, which is the whole of why that end-to-end was run.
 - **nanobot's usage is gross too.** A measured two-request turn: `input_tokens` 11,107 with
