@@ -5575,7 +5575,8 @@ def _opencode_npm(auth: Auth, model: str, pr: str) -> str:
 
 def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] | None,
                      skills_dir: str | None, tools_disabled: list[str] | None = None,
-                     pr: str = "", backend: str = "opencode", key_env: str = "") -> str:
+                     pr: str = "", backend: str = "opencode", key_env: str = "",
+                     npm: str = "") -> str:
     """Write <cwd>/.harness/<backend>.json and return the provider-qualified model id for --model.
 
     `backend`/`key_env` exist for MiMo Code, which is an opencode FORK and reads the same config
@@ -5595,7 +5596,10 @@ def _opencode_config(auth: Auth, model: str, cwd: str, mcp_servers: list[dict] |
     # chat/completions, and sending it to the openai-compatible package fails at the first call.
     # When api_format is set (custom integration), the user's explicit choice wins over any
     # model-family heuristic — the endpoint is the one they told us to reach.
-    npm = _opencode_npm(auth, model, pr)
+    # `npm` lets a caller decide the package itself: mimo does, because opencode's choice sends
+    # an aggregator's claude id down the Messages shape and off the relay, where nothing can
+    # read the served model back (see _mimo_npm).
+    npm = npm or _opencode_npm(auth, model, pr)
     # Every ai-sdk package appends its own resource to baseURL (@ai-sdk/anthropic "/messages",
     # @ai-sdk/openai "/responses", openai-compatible "/chat/completions") and expects the "/v1"
     # to be there already, the way pi's openai clients do (see _pi_models_json). A connection
@@ -5747,13 +5751,41 @@ MIMO_PROVIDERS = set(OPENCODE_PROVIDERS)
 _MIMO_KEY_ENV = "HR_MIMO_KEY"
 
 
+def _mimo_npm(auth: Auth, model: str, pr: str) -> str:
+    """Which ai-sdk package serves this mimo turn — opencode's choice, with ONE difference.
+
+    opencode sends a claude id on an AGGREGATOR through @ai-sdk/anthropic, i.e. the Messages shape.
+    A Messages turn cannot ride the loopback relay (the relay routes by its Bearer placeholder and
+    Anthropic takes the key in x-api-key), and mimo names no served model of its own — so every
+    claude row on an aggregator records NO served_model at all and matrix rule 2 cannot be
+    evaluated on it.
+
+    MEASURED WITH A CONTROL on the Vercel column (2026-10-06): mimo's claude-haiku-4.5 pair came
+    back `unlabelled=4`, no served model on any of its four turns, while all seven of its other
+    models were labelled; jcode's claude-haiku-4.5 pair, which already keeps an aggregator's claude
+    on chat/completions, recorded `anthropic/claude-haiku-4.5`. Five scenarios "passed" on a rule
+    whose input was empty — the shape openhands' 40/40 had.
+
+    So the Messages shape is taken only when the CONNECTION is Anthropic (or a custom integration
+    declared anthropic-format). An aggregator serves a claude id over chat/completions perfectly
+    well, and that keeps the row measurable. This is kilo's finding applied where it was missed.
+    _opencode_npm itself is left alone: opencode's own columns were measured with it."""
+    if auth.api_format:
+        return _opencode_npm(auth, model, pr)
+    if pr == "anthropic":
+        return "@ai-sdk/anthropic"
+    if pr == "azure" or _HERMES_RESPONSES_API_MODEL.search(model or ""):
+        return "@ai-sdk/openai"          # /v1/responses
+    return "@ai-sdk/openai-compatible"   # /v1/chat/completions, and therefore the relay
+
+
 def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, env: dict,
                 resume_session_id: str | None = None, mcp_servers: list[dict] | None = None,
                 skills_dir: str | None = None, tools_disabled: list[str] | None = None) -> list[str]:
     pr = provider or "openai-api"
     if pr not in MIMO_PROVIDERS:
         raise HTTPException(400, f"unknown mimo provider '{pr}' (one of {sorted(MIMO_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _opencode_npm(auth, model, pr) != "@ai-sdk/anthropic":
+    if auth.base_url and auth.api_key and _mimo_npm(auth, model, pr) != "@ai-sdk/anthropic":
         # The relay, for every reason it carries opencode's OpenAI-shape turns (request-shape
         # repair, thought-signature replay, and the real key never reaching the workspace). A
         # Messages-shape turn keeps its direct base: the relay speaks bearer auth and Anthropic
@@ -5763,7 +5795,8 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     if auth.api_key:
         env[_MIMO_KEY_ENV] = auth.api_key
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr,
-                                 backend="mimo", key_env=_MIMO_KEY_ENV)
+                                 backend="mimo", key_env=_MIMO_KEY_ENV,
+                                 npm=_mimo_npm(auth, model, pr))
     env["MIMOCODE_CONFIG"] = os.path.join(cwd, ".harness", "mimo.json")
     cmd = ["mimo", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary and nobody is attached to answer a prompt — the

@@ -646,3 +646,30 @@ def test_opensquilla_transcript_answer_has_the_directive_removed():
     evs = _opensquilla_transcript(state)
     assert state["final"] == "DONE"
     assert "reply_to_current" not in json.dumps(evs)
+
+
+def test_mimo_keeps_an_aggregators_claude_id_on_the_relay_so_rule_2_stays_answerable():
+    # MEASURED WITH A CONTROL on the Vercel column (2026-10-06): mimo's claude-haiku-4.5 pair came
+    # back unlabelled=4 — no served model on any of its four turns — while its seven other models
+    # were labelled, and jcode's claude pair, which already keeps aggregator claude on
+    # chat/completions, recorded anthropic/claude-haiku-4.5. Five scenarios "passed" on a rule with
+    # no input. A Messages turn cannot ride the relay, and mimo names no served model itself.
+    from server import _mimo_npm, _opencode_npm
+    a = Auth(api_key="k", base_url=UP)
+    # opencode's own choice is deliberately left alone; mimo's differs exactly here
+    assert _opencode_npm(a, "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/anthropic"
+    assert _mimo_npm(a, "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/openai-compatible"
+    # a connection that IS Anthropic still speaks Messages — that one cannot ride the relay anyway
+    assert _mimo_npm(a, "claude-haiku-4.5", "anthropic") == "@ai-sdk/anthropic"
+    # and nothing else moved
+    assert _mimo_npm(a, "gpt-5.4", "tokenrouter") == "@ai-sdk/openai"
+    assert _mimo_npm(a, "deepseek-v4-flash", "tokenrouter") == "@ai-sdk/openai-compatible"
+
+    # end to end: the claude row now rides the relay with a placeholder, which is what
+    # _relay_served_model reads the served model off
+    d, env = _ws(), {}
+    _build_mimo("tokenrouter", Auth(api_key="sk-secret", base_url=UP), "claude-haiku-4.5", "hi", d, env)
+    cfg = json.loads((pathlib.Path(d) / ".harness" / "mimo.json").read_text())
+    assert cfg["provider"]["hr"]["npm"] == "@ai-sdk/openai-compatible"
+    assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
+    assert env["HR_MIMO_KEY"].startswith("hr-relay-")
