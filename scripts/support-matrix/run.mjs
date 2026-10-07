@@ -192,9 +192,17 @@ try {
         const inTok = usages.reduce((n, u) => n + (u ? Number(u.input_tokens || 0) : 0), 0);
         const cached = usages.reduce((n, u) => n + (u ? Number(u.cache_read_tokens || (u.input_tokens_details || {}).cached_tokens || 0) : 0), 0);
         rec.tokens = { input: inTok, cache_read: cached, turns_with_usage: usages.filter(Boolean).length };
-        rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
+        // A PASSING pair is cleaned up; a FAILING one is kept. The delete used to be
+        // unconditional, and that is why two failing jcode rows (2026-10-06) could not be
+        // investigated afterwards: the session was gone, so /files and /turns answered 404 and all
+        // that survived was the judge's own sentence about what it saw. The record says what the
+        // JUDGE saw; the session is the only place that says what the SYSTEM did.
+        const failed = ['first', 'followup', 'switch', 'artifact', 'recycle']
+          .some((n) => rec[n] && rec[n].ok === false);
+        if (failed) { rec.kept = rec.sid; rec.deleted = 0; }
+        else rec.deleted = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/v1/sessions/${sid}`, { method: 'DELETE' }); return r.status; }, rec.sid).catch(() => 0);
       }
-      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''} deleted=${rec.deleted || '?'}`);
+      const all = load(); all[k] = rec; save(all); log(`PAIR_DONE ${k} connection=${rec.connection || '?'} turns=${(rec.connections || []).join('+') || '?'}${(rec.foreign || []).length ? ' FOREIGN=' + rec.foreign.join('+') : ''}${(rec.served || []).length ? ' served=' + rec.served.join('+') : ''}${(rec.substituted || []).length ? ' SUBSTITUTED=' + rec.substituted.join('+') : ''}${rec.kept ? ' KEPT=' + rec.kept : ' deleted=' + (rec.deleted || '?')}`);
     }
   }
 } catch (e) { log(`FATAL ${String(e).slice(0, 300)}`); }

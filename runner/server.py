@@ -3793,6 +3793,19 @@ _STRICT_GEMINI_HOSTS = tuple(h for h in (
     urllib.parse.urlsplit(os.environ.get("HR_HOSTED_BASE", "https://api.harnessrouter.ai")).netloc) if h)
 
 
+# A channel+model whose validator has already refused this process's tool declarations. Each turn
+# gets its OWN relay route, so a flag on the route is forgotten at the next turn and every turn pays
+# one refused round trip (measured: four turns, four refusals). This remembers it for the runner's
+# life instead, keyed by the upstream host and the model, which is as wide as the evidence goes — a
+# different model on the same channel may well be served by something that does not validate this
+# way, and the normalisation flattens anyOf, so it is not applied on a guess.
+_GEMINI_SCHEMA_SEEN: set[tuple[str, str]] = set()
+
+
+def _gemini_schema_key(base: str, model: str) -> tuple[str, str]:
+    return (urllib.parse.urlsplit(base).netloc, str(model or "").lower())
+
+
 def _gemini_channel(base: str) -> bool:
     """Whether `base` is a provider that serves Google's native API under its own root."""
     return any(h in base for h in _STRICT_GEMINI_HOSTS)
@@ -3801,11 +3814,14 @@ def _gemini_channel(base: str) -> bool:
 # description, nullable, enum, properties, required, items, min/max, anyOf and a few more) and
 # refuses anything else: "Unknown name \"$schema\" at 'tools[0].function_declarations[0].parameters'",
 # "Unknown name \"exclusiveMinimum\"", "schema didn't specify the schema type field". Google's own
-# OpenAI-compatible endpoint, OpenRouter and Vercel normalise a harness's JSON-schema declarations
-# before they reach it; TokenRouter's Gemini channels forward them as sent, so the first turn of a
+# OpenAI-compatible endpoint, OpenRouter and Vercel normalise MOST of a harness's JSON-schema
+# declarations — but not all: measured on Vercel 2026-10-07, an optional array parameter
+# (`anyOf: [array, null]`, no `items`) reached Google as sent and was refused, which is why the retry
+# loop applies this on ANY channel once that channel's validator has named the problem.
+# TokenRouter's Gemini channels forward them as sent from the start, so the first turn of a
 # task on opencode ($schema) and cline (exclusiveMinimum, a property without type) failed on the
 # ids those channels serve natively, gemini-3.8-flash for one (measured 2026-09-06, the platform
-# column). Until TokenRouter normalises them itself, this relay does, for that channel only.
+# column). Until TokenRouter normalises them itself, this relay does, proactively for it.
 _GEMINI_SCHEMA_KEYS = {"type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
                        "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength",
                        "pattern", "example", "anyOf", "propertyOrdering", "default", "items", "minimum", "maximum"}
@@ -4235,10 +4251,14 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
         if google and body is not None and self.path.endswith("/chat/completions"):
             body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
             headers["content-length"] = str(len(body))
-        if (_gemini_channel(base) and "gemini" in str(_body_model).lower()
+        if (((_gemini_channel(base) and "gemini" in str(_body_model).lower())
+             or flags.get("gemini_schemas")
+             or _gemini_schema_key(base, _body_model) in _GEMINI_SCHEMA_SEEN)
                 and body is not None and self.path.endswith("/chat/completions")):
             # TokenRouter's Gemini channels hand a harness's JSON-schema tool declarations to Google's
-            # validator as sent; the broker does the same normalisation for brokered traffic
+            # validator as sent; the broker does the same normalisation for brokered traffic. The flag
+            # carries the same repair on a channel this did not expect to need it, once that channel's
+            # own validator has named the problem (below).
             body = _with_gemini_schemas(body)
             headers["content-length"] = str(len(body))
         resp = None
@@ -4313,6 +4333,29 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     body = _google_with_signatures(body, flags.setdefault("google_sigs", {}))
                     headers["content-length"] = str(len(body))
                     continue
+                if (attempt < 2 and e.code == 400 and b"function_declarations" in data
+                        and not flags.get("gemini_schemas") and body is not None
+                        and self.path.endswith("/chat/completions")):
+                    # Google's validator refused OUR tool declarations through a channel this relay
+                    # did not think needed normalising. MEASURED on Vercel (2026-10-07, the batch-3
+                    # nanobot column): "function_declarations[14].parameters.properties[args].items:
+                    # field predicate failed: $type == Type.ARRAY" and "…any_of[0].items: missing
+                    # field" — an optional array parameter, passed through to Google as sent. The
+                    # comment above _GEMINI_SCHEMA_KEYS said Vercel normalises these before they
+                    # reach Google; for this shape it does not, and one of eight models was dead on
+                    # its FIRST turn with nothing in the harness's own log to read.
+                    # Reactive rather than proactive on purpose: the normaliser flattens anyOf, which
+                    # loses information a channel that handles it faithfully would have kept. It is
+                    # applied only after that channel has refused, and then for the rest of the route.
+                    fixed = _with_gemini_schemas(body)
+                    if fixed != body:
+                        flags["gemini_schemas"] = True
+                        _GEMINI_SCHEMA_SEEN.add(_gemini_schema_key(base, _body_model))
+                        body = fixed
+                        headers["content-length"] = str(len(body))
+                        print("[relay] provider's validator refused the harness's tool declarations; "
+                              "normalised them for Google's schema and sent again", flush=True)
+                        continue
                 unknown = _google_unknown_field(data) if e.code == 400 else ""
                 dropped = _drop_top_level_field(body, unknown) if (unknown and body is not None) else None
                 if attempt < 2 and dropped is not None and dropped != body:
