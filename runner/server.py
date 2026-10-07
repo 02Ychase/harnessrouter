@@ -902,6 +902,68 @@ def _safe_join(cwd: str, rel: str) -> pathlib.Path | None:
     return p
 
 
+# nanobot is the one base whose agent workspace is a SUBDIRECTORY of the session (_NANOBOT_WS):
+# its own loader refuses a session store inside the workspace, so the session dir holds the store
+# and the agent works one level down. That makes the session's file root and the agent's cwd two
+# different directories, and everything the USER exchanges with the session goes through the
+# session root: attachments, an app's PUT (the slides kit's deck.json), the produced-files list and
+# its downloads. MEASURED on a live instance: a file written through PUT /v1/sessions/{sid}/files
+# landed at the session root and the agent answered "there is no secret.txt in the working
+# directory" — while the same test on a flat-layout base read it back. The marker is what lets the
+# file routes, which know only an identifier, find the directory the agent actually looks in.
+_AGENT_SUBDIR_MARKER = pathlib.Path(".harness", "agent-subdir")
+
+
+def _agent_subdir_set(ws: str, sub: str) -> None:
+    try:
+        m = pathlib.Path(ws) / _AGENT_SUBDIR_MARKER
+        m.parent.mkdir(parents=True, exist_ok=True)
+        m.write_text(sub)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _visible_root(ws: str) -> str:
+    """The directory whose contents are the USER's files. The session dir for every base but one."""
+    try:
+        sub = (pathlib.Path(ws) / _AGENT_SUBDIR_MARKER).read_text().strip()
+    except OSError:
+        return ws
+    # _safe_join VALIDATES (it rejects an escape), but it also resolves symlinks, and on a mac
+    # /var is one — a resolved root does not share a prefix with the ws it came from, so the
+    # relpath below became "../../.." and nothing was stripped. The returned path is therefore
+    # built from ws as the caller spelled it.
+    if not sub or _safe_join(ws, sub) is None:
+        return ws
+    d = os.path.join(ws, sub)
+    return d if os.path.isdir(d) else ws
+
+
+def _adopt_into(ws: str, sub: str) -> None:
+    """Move user files sitting at the session root into the agent's workspace.
+
+    The write paths that run BEFORE a backend is built — a caller's attachments, and an app's PUT on
+    a session that has not had a turn yet — have no way to know a base nests its workspace, so they
+    land at the root. Rather than teach each of them, the one base that nests adopts them here, at
+    the start of every turn, which is exactly when the agent is about to look. Only the runner's own
+    entries stay behind; nothing else at the root belongs to anyone but the session."""
+    root = pathlib.Path(ws)
+    # DERIVED from the same lists /produced excludes, so "the runner's own entries" means one thing
+    # in both places: a name added to those lists is also a name this leaves at the root.
+    keep = ({".git", ".gitignore", sub} | _PRODUCED_EXCLUDE_NAMES | _NOISE_SEG
+            | {q.rstrip("/") for q in _PRODUCED_EXCLUDE_PREFIX})
+    for child in root.iterdir():
+        if child.name in keep:
+            continue
+        dest = root / sub / child.name
+        if dest.exists():
+            continue
+        try:
+            os.replace(child, dest)
+        except OSError:
+            pass
+
+
 def _write_input_files(cwd: str, files: list[dict] | None) -> list[str]:
     """Write caller-attached input files (base64) into the workspace so the agent can read them."""
     written: list[str] = []
@@ -7712,6 +7774,9 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     cfg_dir = pathlib.Path(cwd, ".harness", "nanobot")
     work = pathlib.Path(cwd, _NANOBOT_WS)
     work.mkdir(parents=True, exist_ok=True)
+    # the session's file root is one level up from the agent's cwd; see _visible_root
+    _agent_subdir_set(cwd, _NANOBOT_WS)
+    _adopt_into(cwd, _NANOBOT_WS)
     # nanobot's own machinery inside the agent's workspace. MEASURED on the Vercel column
     # (2026-10-06): without this a turn that wrote NOTHING handed the user 25 files — the three
     # built-in skill bundles, the instruction file and nanobot's workspace id — and all eight
@@ -9086,6 +9151,25 @@ def _produced_list(ws: str) -> list[dict]:
     return [{"path": k, "status": v, "mtime": _mtime(k)} for k, v in seen.items()]
 
 
+def _produced_visible(ws: str) -> list[dict]:
+    """_produced_list, with every path named the way the AGENT names it.
+
+    git runs on the session dir, which is one level above the agent's workspace on the one base that
+    nests (see _visible_root). A card reading "workspace/report.md" names a directory the user never
+    typed and no other base shows, so the prefix comes off here — the one place the cards and their
+    download both resolve through. A path OUTSIDE the visible root (an app's PUT that no turn has
+    adopted yet) is left alone, and GET /file resolves either shape."""
+    out = _produced_list(ws)
+    root = _visible_root(ws)
+    if root == ws:
+        return out
+    pre = os.path.relpath(root, ws) + "/"
+    for f in out:
+        if f["path"].startswith(pre):
+            f["path"] = f["path"][len(pre):]
+    return out
+
+
 def _produced_ack(ws: str) -> str:
     """Advance the cursor: commit the current state and point the ref at it. Called by the gateway
     ONLY after it has captured the listed files, which is the one thing that makes 'collected'
@@ -9102,8 +9186,7 @@ def _produced_ack(ws: str) -> str:
 def produced(identifier: str = "") -> dict:
     """Files changed since the last acknowledged collection — surviving checkpoints, crashes and
     cancels in between. Excludes internal state / scratch / secrets / vcs."""
-    ws = _ws(identifier)
-    out = _produced_list(ws)
+    out = _produced_visible(_ws(identifier))
     return {"files": out, "count": len(out)}
 
 
@@ -9116,7 +9199,12 @@ def produced_ack(identifier: str = "") -> dict:
 @app.get("/file")
 def get_file(path: str, identifier: str = "") -> Response:
     """Raw bytes of a workspace file (for downloading turn-produced container files)."""
-    dest = _safe_join(_ws(identifier), path)
+    ws = _ws(identifier)
+    # the visible root first, because that is how /produced named it; the session root second, so a
+    # path written before the agent's workspace existed still downloads.
+    dest = _safe_join(_visible_root(ws), path)
+    if dest is None or not dest.is_file():
+        dest = _safe_join(ws, path)
     if dest is None or not dest.is_file():
         raise HTTPException(404, "file not found")
     media = mimetypes.guess_type(str(dest))[0] or "application/octet-stream"

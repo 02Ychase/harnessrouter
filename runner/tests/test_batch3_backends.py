@@ -26,7 +26,8 @@ from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa
                     _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
-                    _opensquilla_usage, _resume_lost, _write_skills)
+                    _opensquilla_usage, _produced_visible, _resume_lost, _visible_root,
+                    _write_input_files, _write_skills)
 
 UP = "https://up.example/v1"
 
@@ -716,3 +717,70 @@ def test_opensquilla_memory_source_is_state_and_the_comment_says_what_it_actuall
     assert 'source = "state"' in cfg
     assert "does NOT stop the four bootstrap seeds" in cfg
     assert env["OPENSQUILLA_STATE_DIR"].endswith("/.harness/opensquilla")
+
+
+# ── nanobot's nested workspace must not reach the user ───────────────────────────────────
+# Found by running the product, not by reading it: a file written through
+# PUT /v1/sessions/{sid}/files landed at the session root and the agent answered "there is no
+# secret.txt in the working directory", while the same test on a flat-layout base read it back.
+# The session's file root and the agent's cwd are two different directories for this one base.
+
+def _nano(d, prompt="hi"):
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", prompt, d, {})
+
+
+def test_the_visible_root_is_the_session_dir_for_a_flat_base():
+    d, env = _ws(), {}
+    _build_mimo("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    assert _visible_root(d) == d
+    assert {f["path"] for f in _produced_visible(d)} == {f["path"] for f in
+                                                        __import__("server")._produced_list(d)}
+
+
+def test_the_visible_root_is_the_agent_workspace_for_nanobot():
+    d = _ws()
+    _nano(d)
+    assert _visible_root(d) == str(pathlib.Path(d, "workspace"))
+
+
+def test_a_file_the_user_wrote_before_the_first_turn_reaches_the_agent():
+    # the PUT route and attachments both land at the session root; they run before any backend is
+    # built, so they cannot know a base nests. The turn adopts them.
+    d = _ws()
+    pathlib.Path(d, "deck.json").write_text('{"slides": 1}')
+    _write_input_files(d, [{"filename": "notes.txt", "content_b64": "aGVsbG8="}])
+    _nano(d)
+    assert pathlib.Path(d, "workspace", "deck.json").read_text() == '{"slides": 1}'
+    assert pathlib.Path(d, "workspace", "notes.txt").read_bytes() == b"hello"
+    assert not pathlib.Path(d, "deck.json").exists()
+
+
+def test_adoption_leaves_the_runners_own_entries_at_the_root():
+    d = _ws()
+    _nano(d)                                 # makes .harness/nanobot and workspace/
+    pathlib.Path(d, "tmp").mkdir(exist_ok=True)
+    _nano(d)
+    for name in (".harness", "tmp", ".git", "workspace"):
+        assert pathlib.Path(d, name).exists(), name
+        assert not pathlib.Path(d, "workspace", name).exists(), name
+
+
+def test_adoption_never_overwrites_what_the_agent_already_has():
+    d = _ws()
+    _nano(d)
+    pathlib.Path(d, "workspace", "report.md").write_text("the agent's")
+    pathlib.Path(d, "report.md").write_text("the uploader's")
+    _nano(d)
+    assert pathlib.Path(d, "workspace", "report.md").read_text() == "the agent's"
+
+
+def test_a_produced_file_is_named_the_way_the_agent_named_it():
+    # a card reading "workspace/report.md" names a directory the user never typed and no other base
+    # shows. The prefix comes off where the cards and their download both resolve.
+    d = _ws()
+    _nano(d)
+    pathlib.Path(d, "workspace", "report.md").write_text("done")
+    import server
+    assert {f["path"] for f in server._produced_list(d)} == {"workspace/report.md"}, (
+        "the raw shape: git runs on the session dir")
+    assert {f["path"] for f in _produced_visible(d)} == {"report.md"}
