@@ -415,6 +415,39 @@ def _resume_lost(backend: str, cmd: list[str], resume_session_id: str | None,
     return None if probe(cwd, cmd, resume_session_id) else resume_session_id
 
 
+def _git_exclude(ws: str, patterns: list[str], why: str) -> None:
+    """Hide a backend's OWN machinery from the produced-files list, through git's own door.
+
+    `/produced` is `git status --porcelain -uall` over the session directory, so anything a CLI
+    writes into the directory the user collects is handed back as the task's deliverable. Every
+    backend but two keeps its machinery under `.harness/`, which _PRODUCED_EXCLUDE_PREFIX already
+    drops. nanobot cannot (its SkillsLoader reads `<workspace>/skills` and nothing else) and
+    opensquilla cannot (`ensure_agent_workspace` seeds SOUL.md, IDENTITY.md, USER.md and MEMORY.md
+    into its workspace unconditionally — `seed_templates` has no caller that passes False and no
+    setting reads it).
+
+    `.git/info/exclude` and NOT a .gitignore: it is per-repository, it is not a file in the
+    agent's workspace (so the agent cannot read, edit or be confused by it, and it is not itself a
+    produced file), and _git_ensure rewrites only the tracked root .gitignore, so this survives
+    every turn. It travels with the session because the checkpoint is a tar of the directory —
+    which also means these files still reach the next turn: what is hidden is the DELIVERABLES
+    list, not the session.
+
+    It excludes UNTRACKED files only, which is the case that matters: these are written on the
+    first turn, and after the first collection they are committed to the checkpoint ref and stop
+    appearing in the diff anyway."""
+    if not patterns:
+        return
+    try:
+        _git_ensure(ws)                      # idempotent; a fresh session may have no repo yet
+        info = pathlib.Path(ws, ".git", "info")
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "exclude").write_text(
+            "\n".join([f"# written by the harness runner: {why}", *patterns, ""]))
+    except Exception:  # noqa: BLE001 — a missing exclude costs noise in a list, never the turn
+        pass
+
+
 def _isolate_session(ws: str) -> None:
     """Make the session directory the one place its uid can write, and make everything in it
     that uid's. Allocation happens once, under a lock, from the owners of the directories that
@@ -7432,6 +7465,14 @@ def _opensquilla_config(auth: Auth, model: str, state_dir: pathlib.Path, anthrop
         "# Nothing is listening on a gateway port here; the one process is the agent turn.",
         'mode = "none"',
         "",
+        "[memory]",
+        "# \"state\", not the default \"workspace\": the memory tools then read and write their",
+        "# markdown under the state dir (tools/builtin/memory_tools.py branches on exactly this)",
+        "# instead of under the directory the user collects, so memory the agent accumulates is not",
+        "# handed back as the task's output. It does NOT stop the four bootstrap seeds below —",
+        "# ensure_agent_workspace writes those whatever this says; _git_exclude is what covers them.",
+        'source = "state"',
+        "",
     ]
     entries = []
     for i, sv in enumerate(mcp_servers or []):
@@ -7492,6 +7533,14 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
     # below, which is what keeps continuity while the profile stays per session.
     env["OPENSQUILLA_STATE_DIR"] = str(state_dir)
     env["OPENSQUILLA_GATEWAY_STATE_DIR"] = str(state_dir / "gateway")
+    # The four files `ensure_agent_workspace` seeds into the workspace, unconditionally — it takes a
+    # `seed_templates` flag that no caller passes and no setting reads, so there is nothing to turn
+    # off. MEASURED on the Vercel column (2026-10-06): a turn that wrote NOTHING handed back
+    # SOUL.md, IDENTITY.md, USER.md and MEMORY.md, their cards stayed in the transcript, and by the
+    # artifact turn rule 3 — the rendered cards must BE the turn's stored files — saw five cards
+    # against a record of one. All eight models, identically.
+    _git_exclude(cwd, ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "memory/"],
+                 "the files opensquilla seeds into every workspace, never the task's output")
     for stale in (transcript, usage_path):
         try:
             stale.unlink()
@@ -7663,6 +7712,14 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     cfg_dir = pathlib.Path(cwd, ".harness", "nanobot")
     work = pathlib.Path(cwd, _NANOBOT_WS)
     work.mkdir(parents=True, exist_ok=True)
+    # nanobot's own machinery inside the agent's workspace. MEASURED on the Vercel column
+    # (2026-10-06): without this a turn that wrote NOTHING handed the user 25 files — the three
+    # built-in skill bundles, the instruction file and nanobot's workspace id — and all eight
+    # nanobot pairs FAILED their first scenario, because the file cards pushed the answer out of
+    # the transcript the judge reads. Re-measured after: the same turn produces 0.
+    _git_exclude(cwd, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
+                       f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
+                 "nanobot's own machinery, never the task's output")
     cfg_path = _nanobot_config(auth, model, cfg_dir, str(work), mcp_servers, max_turns)
     # The session key IS the harness's session id when there is one. The driver always passes a key,
     # so _nanobot_session_present asks the store rather than reading argv.

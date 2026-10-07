@@ -673,3 +673,46 @@ def test_mimo_keeps_an_aggregators_claude_id_on_the_relay_so_rule_2_stays_answer
     assert cfg["provider"]["hr"]["npm"] == "@ai-sdk/openai-compatible"
     assert cfg["provider"]["hr"]["options"]["baseURL"].startswith("http://127.0.0.1:")
     assert env["HR_MIMO_KEY"].startswith("hr-relay-")
+
+
+def test_nanobot_hides_its_own_machinery_from_the_produced_files_list():
+    # MEASURED on the Vercel column (2026-10-06): without this, a turn that wrote NOTHING handed the
+    # user 25 files — the three built-in skill bundles, the instruction file and nanobot's own
+    # workspace id — and all eight nanobot pairs FAILED their first scenario, because the file cards
+    # pushed the answer out of the transcript the judge reads. Re-measured after the fix: 0 files.
+    d, env = _ws(), {}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    ex = pathlib.Path(d, ".git", "info", "exclude")
+    assert ex.is_file(), "/produced is git status, so git's own exclude is the door"
+    lines = {l.strip() for l in ex.read_text().splitlines() if l.strip() and not l.startswith("#")}
+    assert {"workspace/.nanobot/", "workspace/skills/", "workspace/memory/",
+            "workspace/AGENTS.md"} <= lines
+    # NOT a .gitignore: this is not a file in the agent's workspace, so the agent cannot read or
+    # edit it and it is never itself a produced file; and _git_ensure rewrites only the root
+    # .gitignore, so this survives every turn.
+    assert not (pathlib.Path(d) / "workspace" / ".gitignore").exists()
+
+
+def test_opensquilla_hides_the_files_it_seeds_into_every_workspace():
+    # `ensure_agent_workspace` writes SOUL.md, IDENTITY.md, USER.md and MEMORY.md into the agent's
+    # workspace unconditionally — its `seed_templates` flag has no caller that passes False and no
+    # setting reads it, so there is nothing to turn off. Measured: a turn that wrote nothing handed
+    # those four back, and the stale cards then failed rule 3 on the artifact scenario for all
+    # eight models (five cards against a record of one).
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    lines = {l.strip() for l in pathlib.Path(d, ".git", "info", "exclude").read_text().splitlines()
+             if l.strip() and not l.startswith("#")}
+    assert {"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "memory/"} <= lines
+
+
+def test_opensquilla_memory_source_is_state_and_the_comment_says_what_it_actually_does():
+    # It keeps the memory the agent ACCUMULATES out of the collected workspace (memory_tools.py
+    # branches on exactly this value). It does NOT stop the bootstrap seeds — an earlier version of
+    # this change claimed it did, and the column showed otherwise.
+    d, env = _ws(), {}
+    _build_opensquilla("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = pathlib.Path(d, ".harness", "opensquilla", "config.toml").read_text()
+    assert 'source = "state"' in cfg
+    assert "does NOT stop the four bootstrap seeds" in cfg
+    assert env["OPENSQUILLA_STATE_DIR"].endswith("/.harness/opensquilla")
