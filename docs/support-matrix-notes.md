@@ -1826,6 +1826,51 @@ works, and matrix rules 1 and 3 were not exercised at all. The catalogs say so a
   bridge every remote server a harness declares is dropped in silence, so jcode is in
   `_BRIDGED_TRANSPORTS` for both transports. opensquilla takes stdio and SSE but not streamable
   HTTP, so it is bridged for `http`.
+- **jcode's `--model` is its session's INITIAL model, and a resumed turn ignores the one it is
+  given.** Its own help says so ("Interactive sessions can switch providers with /model") and
+  `jcode run` has no model flag of its own, so on `--resume` the model stored with the session wins.
+  Measured on 2026-10-07 with mimo as a flat-layout control in the same run: two turns in one
+  session, haiku then gemini — jcode served `anthropic/claude-haiku-4.5` twice, mimo served each as
+  asked. The family tour served ALL TWELVE of jcode's families with `openai/gpt-5.4` and scored it
+  12 of 12, and the five-scenario column had the same evidence and passed it too: every jcode pair's
+  `served` list held ONE entry where every mimo pair's held two. Both judges now read the served
+  model (`run.mjs` fails a switch row unless the turn naming the partner was served by it;
+  `family-tour.mjs` requires the family's own model), and `_jcode_session_model` points the session
+  store at this turn's model before `--resume` reads it. After: the column is 8/8 with two served
+  entries per pair.
+
+  **What that does not fix, and will not be fixed from here: a turn after a KILLED turn stays on the
+  killed turn's model.** Reproduced deterministically with the same control — A on gpt-5.4 served
+  gpt-5.4, B on haiku killed mid-flight by a 10 s cap, C asked for gemini and was served HAIKU,
+  with the runner's own log line showing it had pointed the store at gemini first. Three places
+  jcode records the model were tried and measured and NONE of them changes it: the session file's
+  top-level `model` (which does fix the normal path, and is what ships), `env_snapshots[].model`
+  (the tour's file carried four consecutive entries naming the cancelled turn's model, which is
+  what made it look like the answer), and the `turns` table of `model-usage-v1.sqlite3`, which the
+  session file's own `model_usage_turn_id` points into. jcode's log has a `model` step inside
+  `restore_session` that assigns it; the binary is stripped, so the mechanism stops being reachable.
+  The alternative — refusing to resume a killed session when the model changed, and saying so with
+  the existing `resume_lost` notice — trades the conversation for the model, and the decision was to
+  keep the conversation and write the limit down here. A turn whose model matters after an
+  interruption should be started as a new session.
+
+- **A jcode turn leaves almost nothing to diagnose with.** Its NDJSON carries `id` and `name` for a
+  tool call and never the INPUT (`tool_done` carries `output`), so the record's tool arguments are
+  `{}` — and a turn that is cancelled loses its served model and its tool list from the record
+  altogether. The 279-tool-call runaway below was readable only from the gateway's event trace.
+
+- **Two of twelve families ran away on jcode and the deck was already correct.** Measured
+  2026-10-07, grok-4.3 on the tour's "make the code line monospace" edit: 193 `bash` + 86 `todo`
+  calls, 68 tool-result rounds, ten minutes, no final answer. The trace shows it had ALREADY made
+  the change (Courier New present, sizes present, schema valid) and kept re-reading the slide XML,
+  the font list, the sizes and the file's sha256, rewriting one completed todo seventeen times.
+  deepseek, kimi, glm and mistral then also failed to settle inside the cap — the first three
+  families, before any model switch had real effect, finished in 27-33 s. jcode has no step or
+  iteration flag of any kind, so nothing bounds this but the turn's wall clock
+  (`MAX_TURN_SECONDS`, six hours by default); the operator's step budget — the gateway's `max_step`,
+  which reaches the runner as `max_turns` — is forwarded by nine of twenty builders and is a no-op
+  on the other eleven, this one included.
+
 - **nanobot's CLI seeds the workspace and makes a second git repository in it.** `nanobot agent -m`
   calls `sync_workspace_templates()`, which creates AGENTS.md, SOUL.md, USER.md, HEARTBEAT.md,
   memory/MEMORY.md, memory/history.jsonl, prompts/README.md and skills/ and then `GitStore.init()`s
