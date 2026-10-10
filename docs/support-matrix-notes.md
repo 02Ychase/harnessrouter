@@ -1783,11 +1783,45 @@ MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT),
 write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
 walks its ancestors" below. The other four are offered.
 
-**NO SUPPORT-MATRIX COLUMN HAS RUN ON ANY OF THEM.** Everything below is behaviour measured
-against the pinned build on a developer machine — flags, event schema, failure reporting, resume,
-usage accounting, tool policy — through a real provider (Vercel's AI gateway) one turn at a time.
-That is not the same evidence as a column: it says each base works, not that each MODEL it offers
-works, and matrix rules 1 and 3 were not exercised at all. The catalogs say so at the ids.
+**The Vercel column, 2026-10-10, all four on ONE build**: eight models each (one per family the
+connection was probed to serve), the five scenarios, `EXPECT_CONNECTION=integration:Vercel`.
+
+| base | pairs | scenarios | unlabelled | foreign | substitutions after samemodel |
+|---|---|---|---|---|---|
+| mimo | 8/8 | 40/40 | 0 | none | none |
+| jcode | 8/8 | 40/40 | 0 | none | none |
+| opensquilla | 8/8 | 40/40 | 0 | none | none |
+| nanobot | 7/8 | 39/40 | 0 | none | none |
+
+The earlier columns were taken on three different builds as the fixes below landed; these were
+re-run together on the tree that ships, because arguing per fix about which column it could not have
+touched is weaker evidence than running them again. `unlabelled` 0 everywhere is what makes rule 2
+readable at all — a turn with no served model is a turn the rule cannot judge, and it is reported
+rather than counted as a pass.
+
+**The two rows that failed, and the difference between them.** Both were investigated from the
+session the driver now KEEPS when a pair fails — before that change the session was deleted on the
+way out and a failing row left only the judge's own sentence.
+
+- **jcode / glm-5.3-flash, artifact: the provider's stream, and the file WAS written.** 290 s, then
+  "Upstream stream ended before terminal chunk". The kept session has `hello-jcode.txt` on disk and
+  in the full file listing, so the work happened; the turn was marked failed and its own produced
+  list was empty, so no card was rendered for it. Re-run: 5/5, so the truncation was the provider's
+  and not repeatable. Counted as a pass in the table above only because the re-run passed — the
+  original row and the re-run are both in the results files.
+- **nanobot / kimi-k3, artifact: repeatable, and not the base's write path.** Failed twice in a row
+  with `tools=0` — the model answered DONE having called nothing, and nothing was on disk anywhere
+  in the session. But a FRESH single turn of the same task on the same pair calls `write_file` and
+  produces the file, and so do both controls (nanobot with gpt-5.4, opensquilla with kimi-k3). What
+  differs is position: the artifact scenario is the FOURTH turn, after three "reply with exactly
+  M1-…" exchanges and a switch away to gpt-5.4 and back, and this model carries that pattern on and
+  answers in text. A model behaviour in a context, repeatable in that scenario, with the base's
+  write path demonstrably working for that exact pair. **The row is left at 7/8 rather than retried
+  until it passes.**
+
+Everything below is behaviour measured against the pinned build on a developer machine — flags,
+event schema, failure reporting, resume, usage accounting, tool policy — through a real provider one
+turn at a time. It says each base works; the column above is what says each MODEL it offers does.
 
 ### What each one is, and what it shares
 
@@ -1978,16 +2012,36 @@ The relay is the one that matters for rule 2: all five reached the provider thro
 placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
 gajae also names the served model itself, on every assistant message.
 
-### What is NOT measured, and must be before any of this counts as a column
+### What every dimension measured, and what is still not measured
 
-- No scenario column on any provider, so matrix rule 1 (served by the connection under test) and
-  rule 3 (rendered cards equal the stored files) are unexercised on all five.
-- Rule 2 is answerable on all five — every one of them rides the loopback relay with the token in
-  the ENVIRONMENT, which is what `_relay_served_model` keys off — but it has not been READ on a
-  real turn record yet. None of these bases names the served model itself.
-- No custom-harness row and no plugin row. All five are in `custom-harness.mjs`'s BASES, so the
-  dimension will cover them when it runs.
-- The family tour has not been run on any of them.
+All four offered bases have now been through all four dimensions on the Vercel connection. gajae is
+not offered and is in none of them (see the write-wall section below).
+
+| dimension | mimo | jcode | opensquilla | nanobot |
+|---|---|---|---|---|
+| five scenarios × 8 models | 8/8 | 8/8 | 8/8 | 7/8 |
+| custom-harness (own skill, own script, tool policy, MCP) | ok | ok | ok | ok |
+| plugin: skills / mcp / sse / http | 4/4 | 4/4 | 4/4 | 4/4 |
+| family tour, 12 families in one conversation | 12/12 | 3/12 | 11/12 | 11/12 |
+
+Rule 2 is not merely answerable on these bases now, it was READ: `unlabelled` is 0 on all 32 pairs,
+so every turn carried a served model off the relay, and no substitution survived `samemodel`.
+
+- **The two tours that show 11 of 12 failed the same family, grok-4.3, inside the same few minutes**,
+  and the reason was the provider's: nanobot's row carried "The model is currently at capacity due to
+  high demand" and opensquilla's carried its own fallback sentence for a terminal event with no
+  message. Both pass grok on a retry — on a fresh session AND on the same long conversation that had
+  failed — so the rows stay as measured with the retries recorded beside them.
+- **jcode's 3 of 12 is the limit written up above**: its fourth family ran away and was killed at the
+  tour's cap, and every family after it stayed on the killed turn's model.
+- Still not measured: any connection other than Vercel. The tour's families were PROBED first,
+  one short turn each, because a family this connection cannot serve would fail a tour for a reason
+  that says nothing about the base: twelve of thirteen answered. llama-3.3-70b was refused by this
+  instance with "no provider configured for backend 'mimo'" — this org holds one integration, which
+  is not a statement about what Vercel serves — so the tour covered twelve. muse is deliberately absent from these runs and no muse credential was used.
+  Note that "Five ids Vercel does not serve at all" earlier in this file names `hunyuan-4-preview`,
+  and this probe was served it as `tencent/hy4-preview` — that passage is a 2026-09-16 measurement
+  and is out of date at least for that id.
 
 ## The disabled tool is the base's own, and the label on the instructions box is the runner's (2026-10-03)
 
