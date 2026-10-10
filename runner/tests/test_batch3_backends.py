@@ -938,3 +938,52 @@ def test_a_flat_base_is_untouched_by_this_rule():
     d = _ws()
     out = _sse_bridges(d, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs"}], "mimo")
     assert out[0].get("url") == "http://127.0.0.1:8080/v1/mcp/plugs"
+
+
+# ── nanobot's shell does not inherit the environment layer ───────────────────────────────
+# Its own `_build_env` says so: "Build a minimal environment for subprocess execution. On Unix, only
+# HOME/LANG/TERM are passed by default." MEASURED by the environments column (2026-10-10): three of
+# four bases used the layer's pip, npm and apt packages without installing anything and nanobot
+# failed all three with ModuleNotFoundError. The layer reached the driver process and stopped there.
+
+LAYER = {"HR_ENVIRONMENT": "/env/x", "PROJECT_ROOT": "/env/x", "PYTHONPATH": "/env/x",
+         "VIRTUAL_ENV": "/env/x/.venv", "NODE_PATH": "/env/x/node_modules",
+         "LD_LIBRARY_PATH": "/env/x/apt/usr/lib",
+         "PATH": "/env/x/.venv/bin:/env/x/node_modules/.bin:/env/x/apt/usr/bin:/usr/bin:/bin"}
+
+
+def test_the_layers_variables_and_path_are_handed_to_the_exec_tool():
+    d, env = _ws(), dict(LAYER)
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    ex = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())["tools"]["exec"]
+    assert set(ex["allowedEnvKeys"]) == set(LAYER) - {"PATH"}
+    # only the layer's own PATH entries, and in the order the turn had them
+    assert ex["pathPrepend"] == "/env/x/.venv/bin:/env/x/node_modules/.bin:/env/x/apt/usr/bin"
+    # by ENTRY, not by substring: /env/x/apt/usr/bin legitimately contains "/usr/bin", and the
+    # first version of this assertion failed the implementation for that
+    assert all(e.startswith("/env/x/") for e in ex["pathPrepend"].split(":")), \
+        "the image's own PATH entries are nanobot's to decide"
+
+
+def test_no_environment_means_no_exec_section():
+    d, env = _ws(), {"PATH": "/usr/bin:/bin"}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    cfg = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())
+    assert "exec" not in (cfg.get("tools") or {})
+
+
+def test_the_exec_section_and_the_mcp_servers_share_the_one_tools_block():
+    d, env = _ws(), dict(LAYER)
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env,
+                   mcp_servers=[{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp"}])
+    t = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())["tools"]
+    assert set(t) == {"mcpServers", "exec"}, "one tools block, or the second overwrites the first"
+
+
+def test_a_layer_with_only_some_of_the_variables_passes_only_those():
+    d, env = _ws(), {"HR_ENVIRONMENT": "/env/y", "PROJECT_ROOT": "/env/y",
+                     "PATH": "/env/y/.venv/bin:/usr/bin"}
+    _build_nanobot("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    ex = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())["tools"]["exec"]
+    assert set(ex["allowedEnvKeys"]) == {"HR_ENVIRONMENT", "PROJECT_ROOT"}
+    assert ex["pathPrepend"] == "/env/y/.venv/bin"

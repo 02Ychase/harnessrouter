@@ -7757,8 +7757,37 @@ ALL_NANOBOT_TOOLS = (
 )
 
 
+# The variables `environments.apply_env` puts on a turn so the layer's interpreter and packages are
+# the ones the agent runs. nanobot's shell tool does NOT inherit them: its own `_build_env` says
+# "Build a minimal environment for subprocess execution. On Unix, only HOME/LANG/TERM are passed by
+# default." MEASURED by the environments column (2026-10-10): three of four bases used the layer's
+# pip, npm and apt packages without installing anything, and nanobot failed all three with
+# ModuleNotFoundError — the layer reached the driver process and stopped there. Its exec tool takes
+# an allow-list and a PATH prepend, so the layer is handed to it by name.
+_ENV_LAYER_KEYS = ("PROJECT_ROOT", "HR_ENVIRONMENT", "PYTHONPATH", "VIRTUAL_ENV", "NODE_PATH",
+                   "LD_LIBRARY_PATH")
+
+
+def _nanobot_exec_env(env: dict) -> dict:
+    """nanobot's `tools.exec` entries that carry the environment layer into its shell, or {}."""
+    link = str(env.get("HR_ENVIRONMENT") or "").strip()
+    if not link:
+        return {}
+    keys = [k for k in _ENV_LAYER_KEYS if env.get(k)]
+    # the layer's own PATH entries, taken as the ones under its directory rather than by
+    # reconstructing what apply_env decided to add
+    prepend = [x for x in str(env.get("PATH") or "").split(":") if x.startswith(link + "/")]
+    out: dict = {}
+    if keys:
+        out["allowedEnvKeys"] = keys
+    if prepend:
+        out["pathPrepend"] = ":".join(prepend)
+    return out
+
+
 def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: str,
-                    mcp_servers: list[dict] | None, max_turns: int | None) -> pathlib.Path:
+                    mcp_servers: list[dict] | None, max_turns: int | None,
+                    env: dict | None = None) -> pathlib.Path:
     """Write <cwd>/.harness/nanobot/config.json and return its path.
 
     The DIRECTORY is the point, not just the file: nanobot derives its data dir from the config
@@ -7795,9 +7824,15 @@ def _nanobot_config(auth: Auth, model: str, cfg_dir: pathlib.Path, workspace: st
         "providers": {"custom": {"apiKey": "${%s}" % _NANOBOT_KEY_ENV, "apiBase": base}},
         "agents": {"defaults": defaults},
     }
+    tools: dict = {}
     mcp = _nanobot_mcp(mcp_servers)
     if mcp:
-        cfg["tools"] = {"mcpServers": mcp}
+        tools["mcpServers"] = mcp
+    ex = _nanobot_exec_env(env or {})
+    if ex:
+        tools["exec"] = ex
+    if tools:
+        cfg["tools"] = tools
     cfg_dir.mkdir(parents=True, exist_ok=True)
     path = cfg_dir / "config.json"
     path.write_text(json.dumps(cfg, indent=2))
@@ -7874,7 +7909,7 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
     _git_exclude(cwd, [f"{_NANOBOT_WS}/.nanobot/", f"{_NANOBOT_WS}/skills/",
                        f"{_NANOBOT_WS}/memory/", f"{_NANOBOT_WS}/AGENTS.md"],
                  "nanobot's own machinery, never the task's output")
-    cfg_path = _nanobot_config(auth, model, cfg_dir, str(work), mcp_servers, max_turns)
+    cfg_path = _nanobot_config(auth, model, cfg_dir, str(work), mcp_servers, max_turns, env)
     # The session key IS the harness's session id when there is one. The driver always passes a key,
     # so _nanobot_session_present asks the store rather than reading argv.
     job = {"config_path": str(cfg_path), "workspace": str(work), "model": model, "prompt": prompt,
