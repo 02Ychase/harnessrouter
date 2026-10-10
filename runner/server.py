@@ -7886,8 +7886,23 @@ def _jcode_session_model(env: dict, session_id: str, model: str) -> str:
         doc = json.loads(path.read_text())
     except Exception:  # noqa: BLE001 — no store, unreadable, not JSON: the turn runs as it would have
         return ""
+    if not isinstance(doc, dict):
+        return ""
     was = str(doc.get("model") or "")
-    if not isinstance(doc, dict) or was == model:
+    # The top-level field, and ONLY it. jcode also keeps the model in `env_snapshots[]` and in
+    # `model-usage-v1.sqlite3`; both were tried and NEITHER changed the one case this does not fix
+    # (below), so neither is in the tree — an intervention into another program's private state
+    # needs a measurement behind it, and these have none.
+    # WHAT THIS DOES NOT FIX, measured 2026-10-10 with a flat-layout control running the same
+    # script: A on gpt-5.4 served gpt-5.4; B on haiku KILLED mid-flight by a 10s cap; C asked for
+    # gemini and was served HAIKU — the killed turn's model — with this function's own log line
+    # showing it had pointed the store at gemini first. jcode's log has a `model` step inside
+    # `restore_session` that assigns it, and the source is not the session file, not
+    # `env_snapshots[]` and not `model-usage-v1.sqlite3` (all three tried and measured). The binary
+    # is stripped, so the mechanism stops being reachable from here. The normal path IS fixed and
+    # measured; a turn after a KILLED turn stays on the killed turn's model until someone with the
+    # source can say why. mimo, the control, is right on both paths.
+    if was == model:
         return ""
     doc["model"] = model
     tmp = path.with_suffix(".hr-tmp")
