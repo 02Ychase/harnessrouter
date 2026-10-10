@@ -4317,14 +4317,18 @@ class _HermesRelayHandler(http.server.BaseHTTPRequestHandler):
                     print(f"[relay] provider refused reasoning_effort's thinking shape for model={_body_model}; "
                           f"sent again without it", flush=True)
                     continue
-                if e.code in (400, 422):
-                    # The provider's own words, kept here for every provider: a harness shows a
-                    # refusal as "400 (no body)" (Gemini CLI) or cuts it to a few dozen characters
-                    # (CheetahClaws), and a matrix row that fails must carry the reproduced text
-                    # (docs/harness-verification.md). A llama-3.3-70b turn on a compacted history
-                    # was refused as "malformed" on 2026-09-27 with the reason cut off.
-                    print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
-                          f"status={e.code}: {data[:300]!r}", flush=True)
+                # The provider's own words, kept here for EVERY provider and every status: a
+                # harness shows a refusal as "400 (no body)" (Gemini CLI) or cuts it to a few
+                # dozen characters (CheetahClaws), and a matrix row that fails must carry the
+                # reproduced text (docs/harness-verification.md). A llama-3.3-70b turn on a
+                # compacted history was refused as "malformed" on 2026-09-27 with the reason cut
+                # off. This was 400 and 422 only, which is why a repeatable grok failure on
+                # opensquilla (2026-10-10) left nothing to read: its own code falls back to "The
+                # model provider request failed." when the terminal event carries no message, so
+                # the provider's status and body were the only account of it that existed, and
+                # at 429 or 503 this did not print them.
+                print(f"[relay] {'google' if google else 'provider'} refused {tail} model={_body_model} "
+                      f"status={e.code}: {data[:300]!r}", flush=True)
                 if (attempt < 2 and e.code == 400 and b"thought_signature" in data
                         and not flags.get("thought_signature") and body is not None):
                     # a Gemini 3 endpoint this relay did not recognise as Google names the need itself
