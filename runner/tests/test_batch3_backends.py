@@ -26,7 +26,8 @@ from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa
                     _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
-                    _opensquilla_usage, _produced_visible, _resume_lost, _visible_root,
+                    _jcode_session_model, _opensquilla_usage, _produced_visible, _resume_lost,
+                    _visible_root,
                     _write_input_files, _write_skills)
 
 UP = "https://up.example/v1"
@@ -831,3 +832,65 @@ def test_a_stdio_server_keeps_command_args_env():
 def test_no_servers_means_no_tools_section_at_all():
     cfg = _nano_cfg([])
     assert "tools" not in cfg and "mcp" not in cfg
+
+
+# ── jcode: the model a resumed turn asked for ───────────────────────────────────────────
+# jcode's --model and --provider are its session's INITIAL ones, and `jcode run` has no model flag,
+# so on --resume the stored model wins and the person's pick is ignored in silence. MEASURED with a
+# control in the same run: two turns in one session, haiku then gemini — jcode served haiku twice,
+# mimo served each as asked. The family tour served all TWELVE of jcode's families with
+# openai/gpt-5.4; the five-scenario column held the same evidence (one `served` entry per pair where
+# mimo had two) and passed it, because its switch target is the subset's first id.
+
+def _jcode_store(d, env, sid, model, provider="openai-compatible"):
+    # the runner points HOME inside the checkpointed workspace before the builder runs, and that is
+    # where jcode keeps its sessions; the builder itself does not set it.
+    env.setdefault("HOME", str(pathlib.Path(d, ".harness", "home")))
+    home = pathlib.Path(env["HOME"], ".jcode", "sessions")
+    home.mkdir(parents=True, exist_ok=True)
+    f = home / f"{sid}.json"
+    f.write_text(json.dumps({"id": sid, "model": model, "provider_key": provider,
+                             "messages": [{"role": "user", "content": "hi"}]}))
+    return f
+
+
+def test_resuming_points_the_store_at_the_model_this_turn_asked_for():
+    d, env = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    f = _jcode_store(d, env, "sess-1", "anthropic/claude-haiku-4.5")
+    argv = _build_jcode("openai-api", Auth(api_key="k", base_url=UP),
+                        "google/gemini-3.6-flash", "next", d, env, resume_session_id="sess-1")
+    assert "--resume" in argv and argv[argv.index("--resume") + 1] == "sess-1"
+    doc = json.loads(f.read_text())
+    assert doc["model"] == "google/gemini-3.6-flash"
+    # only the model: the conversation and the provider key are jcode's to keep
+    assert doc["provider_key"] == "openai-compatible" and doc["messages"]
+
+
+def test_a_turn_on_the_same_model_leaves_the_store_untouched():
+    d, env = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    f = _jcode_store(d, env, "sess-2", "openai/gpt-5.4")
+    before = f.read_text()
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "openai/gpt-5.4", "next", d, env,
+                 resume_session_id="sess-2")
+    assert f.read_text() == before
+
+
+def test_a_store_that_is_not_there_or_not_json_does_not_fail_the_turn():
+    d, env = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    # no file at all: _jcode_has_session already declines to resume, and this must not raise either
+    assert _jcode_session_model(env, "missing", "gpt-5.4") == ""
+    f = _jcode_store(d, env, "sess-3", "openai/gpt-5.4")
+    f.write_text("{not json")
+    assert _jcode_session_model(env, "sess-3", "google/gemini-3.6-flash") == ""
+    assert f.read_text() == "{not json", "a store it cannot parse is left exactly as it was"
+
+
+def test_no_model_asked_for_means_no_rewrite():
+    d, env = _ws(), {}
+    _build_jcode("openai-api", Auth(api_key="k", base_url=UP), "gpt-5.4", "hi", d, env)
+    f = _jcode_store(d, env, "sess-4", "openai/gpt-5.4")
+    assert _jcode_session_model(env, "sess-4", "") == ""
+    assert json.loads(f.read_text())["model"] == "openai/gpt-5.4"

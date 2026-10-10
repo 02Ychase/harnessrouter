@@ -6,6 +6,36 @@
 // IGNORE_TLS=1 for a self-signed instance.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+const SM_HERE = path.dirname(new URL(import.meta.url).pathname);
+
+// THE SWITCH TURN HAS TO BE SERVED BY THE MODEL THE CHIP MOVED TO. `substituted` below judges only
+// turns whose record names THIS pair's model, and the switch turn names the partner on purpose — so
+// nothing looked at what served it. jcode's eight pairs passed their switch row on 2026-10-07 while
+// not one switch took: its `--model` is a session's INITIAL model, so on --resume the stored one won.
+// The shape was in the records the whole time — every jcode pair's `served` list had ONE entry where
+// every mimo pair's had two — and no rule read it.
+//
+// samemodel.py is the gateway's own rule, called rather than copied (a vendor prefix, a dated suffix
+// and an outright rename like tencent/hy4-preview for hunyuan-4-preview are all the same model). It
+// needs 3.10+ and a mac's `python3` is 3.9, so the interpreter is chosen by importing the module
+// with it; a run with none to choose stops rather than measuring with a rule that always says no.
+const SM_PYTHON = (() => {
+  for (const c of [process.env.PYTHON, 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3'].filter(Boolean)) {
+    try { execFileSync(c, ['-c', 'import samemodel'], { cwd: SM_HERE, stdio: 'ignore' }); return c; } catch { /* next */ }
+  }
+  console.error('no python that can import samemodel.py (needs 3.10+); set PYTHON=');
+  process.exit(2);
+})();
+const sameModel = (asked, served) => {
+  if (!asked || !served) return false;
+  try {
+    return execFileSync(SM_PYTHON, ['-c',
+      'import sys, samemodel as m; print("1" if m.alias_of(sys.argv[1], sys.argv[2]) else "0")',
+      String(asked), String(served)], { cwd: SM_HERE, encoding: 'utf8' }).trim() === '1';
+  } catch { return false; }
+};
 const BASE = process.env.BASE, PROVIDER = process.env.PROVIDER, RESULTS = process.env.RESULTS, LOG = process.env.LOG;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (s) => { const line = `${new Date().toISOString()} ${s}`; console.log(line); fs.appendFileSync(LOG, line + '\n'); };
@@ -176,6 +206,20 @@ try {
         rec.substituted = withModel.length
           ? [...new Set(withModel.filter((t) => t.model === m && String(t.served_model).split(',').some((x) => x && x !== m)).map((t) => String(t.served_model)))]
           : (rec.served.length && !rec.served.some((sm) => sm.split(',').includes(m)) ? rec.served : []);
+        // The switch row, judged on the SERVED model and not only on the word it echoed back.
+        const partner = rec.switch && rec.switch.to;
+        if (partner && withModel.length) {
+          const swTurns = withModel.filter((t) => String(t.model) === String(partner));
+          rec.switch_served = [...new Set(swTurns.map((t) => String(t.served_model)))];
+          const took = swTurns.length > 0 && swTurns.every((t) => sameModel(partner, String(t.served_model)));
+          if (rec.switch.ok === true && !took) {
+            rec.switch.ok = false;
+            rec.switch.why = swTurns.length
+              ? `the chip moved to ${partner} and the turn was served by ${rec.switch_served.join(',')}`
+              : `no turn record names ${partner}, so the switch cannot be shown to have happened`;
+            log(`SWITCH ${k} -> ${partner} FAIL (on the served model) ${rec.switch.why}`);
+          }
+        }
         if (process.env.EXPECT_CONNECTION) rec.foreign = rec.connections.filter((c) => c !== process.env.EXPECT_CONNECTION);
         // A turn on this pair's model with NO served model is a turn rule 2 could not judge, and a
         // finding of its own: the direct Anthropic route on Claude Code reported none for months

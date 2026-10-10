@@ -7861,6 +7861,51 @@ def _jcode_has_session(env: dict, session_id: str) -> bool:
     return (pathlib.Path(home) / ".jcode" / "sessions" / f"{session_id}.json").is_file()
 
 
+def _jcode_session_model(env: dict, session_id: str, model: str) -> str:
+    """Point a resumed jcode session at the model THIS turn asked for; → what it held before.
+
+    jcode's `--model` and `--provider` are documented as the INITIAL ones ("Interactive sessions can
+    switch providers with /model"), and `jcode run` has no model flag of its own, so on `--resume`
+    the model stored with the session wins and the one the person just picked is ignored in silence.
+
+    MEASURED, with a flat control in the same run (2026-10-07): two turns in one session, haiku then
+    gemini — jcode served `anthropic/claude-haiku-4.5` twice, mimo served each model as asked. The
+    family tour is what exposed it, serving all TWELVE families with openai/gpt-5.4; the five-scenario
+    column had the same evidence and passed anyway, because its switch target is the subset's first
+    id and every jcode pair's `served` list simply had one entry where every mimo pair's had two.
+    Serving a model other than the one that was asked for is the failure this product's rule 2 exists
+    to catch, so the store is corrected rather than the switch being refused.
+
+    The file is jcode's own (`$HOME/.jcode/sessions/<id>.json`, inside the checkpointed home) and the
+    field is the one it writes there itself. Written beside and renamed, keeping the session uid, so a
+    crash cannot leave a half-written session file where jcode expects JSON."""
+    if not model:
+        return ""
+    path = (pathlib.Path(env.get("HOME") or "") / ".jcode" / "sessions" / f"{session_id}.json")
+    try:
+        doc = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001 — no store, unreadable, not JSON: the turn runs as it would have
+        return ""
+    was = str(doc.get("model") or "")
+    if not isinstance(doc, dict) or was == model:
+        return ""
+    doc["model"] = model
+    tmp = path.with_suffix(".hr-tmp")
+    try:
+        tmp.write_text(json.dumps(doc))
+        st = path.stat()
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return ""
+    return was
+
+
 def _jcode_write_mcp(home: pathlib.Path, servers: list[dict] | None) -> bool:
     """Write $HOME/.jcode/mcp.json, jcode's global MCP config. Returns whether anything was written.
 
@@ -7946,6 +7991,12 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
            "--quiet",
            "--provider", prov, "--model", model]
     if resume_session_id and _jcode_has_session(env, resume_session_id):
+        # before --resume, not after: the model this turn asked for has to be in the store jcode is
+        # about to read, because its own --model is only the session's INITIAL one.
+        was = _jcode_session_model(env, resume_session_id, model)
+        if was:
+            print(f"[jcode] session {resume_session_id} held model {was}; this turn asked for "
+                  f"{model}, so the store was pointed at it", flush=True)
         cmd += ["--resume", resume_session_id]
     elif resume_session_id:
         print(f"[resume] jcode: session {resume_session_id} not in this workspace — starting fresh",
