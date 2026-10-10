@@ -26,7 +26,8 @@ from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa
                     _BRIDGED_TRANSPORTS, _gajae_to_claude, _jcode_eof, _jcode_to_claude,
                     _opencode_to_claude, _opensquilla_eof, _opensquilla_to_claude,
                     _opensquilla_transcript,
-                    _jcode_session_model, _opensquilla_usage, _produced_visible, _resume_lost,
+                    _jcode_session_model, _mcp_url_is_loopback, _opensquilla_usage,
+                    _produced_visible, _resume_lost, _sse_bridges,
                     _visible_root,
                     _write_input_files, _write_skills)
 
@@ -894,3 +895,46 @@ def test_no_model_asked_for_means_no_rewrite():
     f = _jcode_store(d, env, "sess-4", "openai/gpt-5.4")
     assert _jcode_session_model(env, "sess-4", "") == ""
     assert json.loads(f.read_text())["model"] == "openai/gpt-5.4"
+
+
+# ── nanobot refuses a loopback MCP url, and the product injects one ──────────────────────
+# Found by the browser column (2026-10-10): the `plugs` server is how EVERY base gets the browser
+# tools and it is injected at http://127.0.0.1:8080/v1/mcp/plugs. nanobot was the one base of four
+# that made no browser call at all, twice, and said it had no browser toolset — while its config
+# held the server correctly. Its MCP client runs `validate_url_target` over every url and drops a
+# loopback one with a log line of its own, so nothing reaches the turn record as a refusal.
+
+def test_a_loopback_server_is_bridged_for_nanobot():
+    d = _ws()
+    out = _sse_bridges(d, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs",
+                            "headers": {"Authorization": "Bearer t"}}], "nanobot")
+    assert out[0].get("command"), "it has to arrive as a stdio command, with no url to validate"
+    assert "url" not in out[0] and "headers" not in out[0]
+    launcher = pathlib.Path(out[0]["command"]).read_text()
+    assert "HR_MCP_URL" in launcher and "127.0.0.1:8080" in launcher
+    assert "Bearer t" not in pathlib.Path(out[0]["command"]).name, "never on the command line"
+
+
+def test_a_public_server_still_goes_to_nanobots_own_client():
+    # measured in both the custom-harness and the plugin columns: its remote client handles a public
+    # streamable-HTTP and SSE server, so bridging those would add a hop for nothing.
+    d = _ws()
+    out = _sse_bridges(d, [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp"}], "nanobot")
+    assert out[0].get("url") == "https://mcp.deepwiki.com/mcp" and "command" not in out[0]
+
+
+def test_which_hosts_count_as_loopback():
+    for u in ("http://127.0.0.1:8080/x", "http://localhost:3000/x", "http://[::1]:9/x",
+              "http://10.1.2.3/x", "http://192.168.0.5/x", "http://172.16.4.4/x",
+              "http://169.254.169.254/latest", "http://api.localhost/x"):
+        assert _mcp_url_is_loopback(u), u
+    for u in ("https://mcp.deepwiki.com/mcp", "https://example.com/x", "http://172.32.0.1/x",
+              "http://1.2.3.4/x"):
+        assert not _mcp_url_is_loopback(u), u
+
+
+def test_a_flat_base_is_untouched_by_this_rule():
+    # the rule is nanobot's; mimo reaches a loopback server itself and must keep doing so
+    d = _ws()
+    out = _sse_bridges(d, [{"name": "plugs", "url": "http://127.0.0.1:8080/v1/mcp/plugs"}], "mimo")
+    assert out[0].get("url") == "http://127.0.0.1:8080/v1/mcp/plugs"

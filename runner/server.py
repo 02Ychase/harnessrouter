@@ -1431,6 +1431,37 @@ _BRIDGED_TRANSPORTS = {"codex": ("sse",), "dsh": ("sse",), "goose": ("sse",),
 _MCP_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge.py")
 
 
+# A backend whose MCP client reaches a remote server fine but REFUSES one on a loopback or private
+# address. nanobot runs `validate_url_target` over every server url and drops the ones it does not
+# like with a log line of its own, so the server is simply absent from the model's tools and nothing
+# reaches the turn record as a refusal. MEASURED by the browser column (2026-10-10): the `plugs`
+# server, which is how every base gets the browser tools, is injected at
+# http://127.0.0.1:8080/v1/mcp/plugs — nanobot was the one base of four that made NO browser call,
+# twice, and said "I don't currently have the browser toolset available in this session" while its
+# config held the server correctly at tools.mcpServers.plugs.
+#
+# The bridge is the fix rather than nanobot's own `tools.ssrf_whitelist`: that list is applied
+# GLOBALLY by its config loader, so whitelisting the loopback range to let the product's own server
+# through would also let the AGENT's fetch tools reach anything on loopback — the exact thing that
+# guard is there to stop. Bridged, there is no url for nanobot to validate: the runner speaks to the
+# server and the agent sees a stdio command. Its own remote client keeps handling PUBLIC servers,
+# which is measured (the deepwiki server over streamable HTTP and SSE, both columns).
+_BRIDGE_LOOPBACK_BACKENDS = {"nanobot"}
+_LOOPBACK_HOSTS = ("localhost", "127.", "::1", "0.0.0.0", "169.254.", "10.", "192.168.")
+
+
+def _mcp_url_is_loopback(url: str) -> bool:
+    """Whether this server's url names a loopback, link-local or private host."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    host = host.strip("[]").lower()
+    if host.startswith("172."):
+        try:                                     # 172.16.0.0/12, and no other 172.
+            return 16 <= int(host.split(".")[1]) <= 31
+        except (IndexError, ValueError):
+            return False
+    return host == "localhost" or host.endswith(".localhost") or host.startswith(_LOOPBACK_HOSTS)
+
+
 def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dict]:
     """Each remote server whose transport this backend's client cannot reach becomes a stdio
     launcher that runs the bridge with the url, the transport and the headers in its environment
@@ -1438,14 +1469,15 @@ def _sse_bridges(cwd: str, servers: list[dict] | None, backend: str) -> list[dic
     without a transport is streamable HTTP, as everywhere else in this file. Other servers and
     backends pass untouched."""
     bridged = _BRIDGED_TRANSPORTS.get(backend)
-    if not bridged:
+    loopback_only = backend in _BRIDGE_LOOPBACK_BACKENDS
+    if not bridged and not loopback_only:
         return list(servers or [])
     out: list[dict] = []
     for s in servers or []:
         s = s or {}
         url = str(s.get("url") or "").strip()
         transport = str(s.get("transport") or "http").lower()
-        if not url or transport not in bridged:
+        if not url or not (transport in (bridged or ()) or (loopback_only and _mcp_url_is_loopback(url))):
             out.append(s)
             continue
         name = _mcp_name(str(s.get("name") or s.get("id") or "mcp"))
