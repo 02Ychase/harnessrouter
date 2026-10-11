@@ -44,7 +44,22 @@ const save = (r) => fs.writeFileSync(RESULTS, JSON.stringify(r, null, 1));
 const key = (h, m) => `${PROVIDER}|${h}|${m}`;
 async function rt(p, s, v) { await p.$eval(s, (el, x) => { const P = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement; Object.getOwnPropertyDescriptor(P.prototype, 'value').set.call(el, x); el.dispatchEvent(new Event('input', { bubbles: true })); }, v); }
 const b = await chromium.launch({ headless: true });
-const page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+// MUTABLE, and replaceable: the renderer can crash, and a crashed page poisons every pair after it.
+// MEASURED on 2026-10-10: one "page.goto: Page crashed" partway through opensquilla's column left
+// the remaining 32 of 50 pairs with that error and no scenarios at all, and the column read as
+// "49/50 pairs" to a reader counting passes. The pair loop now rebuilds this and retries the pair.
+let page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+const CRASHED = /Page crashed|Target (?:page|closed)|Target closed|browser has been closed|Session closed/i;
+async function freshPage() {
+  try { await page.context().close(); } catch { /* already gone */ }
+  page = await (await b.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: process.env.IGNORE_TLS === '1' })).newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' }); await sleep(2500);
+  if (page.url().includes('/login')) {
+    await rt(page, '#sh-user', process.env.HR_USER || 'harnessrouter'); await rt(page, '#sh-pass', process.env.HR_PASS);
+    await page.click('button[type=submit]'); await page.waitForURL((u) => !u.pathname.includes('/login'), { timeout: 60000 });
+  }
+  await sleep(1500); await dismissWelcome();
+}
 const pill = () => page.evaluate(() => document.querySelector('.hx-pill')?.textContent?.trim().toLowerCase() || '');
 const transcript = () => page.evaluate(() => (document.querySelector('.wbx-conv-msgs')?.innerText || '').replace(/\s+/g, ' '));
 const files = () => page.evaluate(() => [...document.querySelectorAll('.wbx-filecard-name')].map((x) => x.textContent.trim()));
@@ -142,10 +157,16 @@ try {
     const runnableAll = models.filter((m) => m.ok && (!scope || scope.has(m.id))).map((m) => m.id);
     const enabled = runnableAll.filter((id) => !process.env.MODELS || process.env.MODELS.split(',').includes(id));
     log(`HARNESS ${h} models ${models.length} runnable ${enabled.length}: ${enabled.join(',')}`);
-    for (const m of enabled) {
+    // a QUEUE, so a pair whose page crashed can be put back after a fresh page is built
+    const enabledQueue = [...enabled]; const retried = new Set();
+    while (enabledQueue.length) {
+      const m = enabledQueue.shift();
       const res = load(); const k = key(h, m);
       if (res[k] && res[k].recycle && !res[k].error) { log(`SKIP ${k} (done)`); continue; }   // a runner error is not a result
-      const rec = res[k] || { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
+      // FRESH, never the previous attempt's record: `const rec = res[k] || {…}` carried a crashed
+      // attempt's `error` and `at` into the re-run that then filled the scenarios in, so a measured
+      // pair still looked errored and a reader (me, 2026-10-10) scored 32 of them as not measured.
+      const rec = { provider: PROVIDER, harness: h, model: m, at: new Date().toISOString() };
       try {
         await page.goto(`${BASE}/harnesses?h=${h}`, { waitUntil: 'domcontentloaded' }); await sleep(3000);
         for (let i = 0; i < 10 && !(await page.locator('.wbx-conv-main.is-hero').count()); i++) { await page.click('button:has-text("New task")').catch(() => {}); await sleep(800); }
@@ -185,8 +206,16 @@ try {
           // the sandbox is let go on purpose (what the pool does between visits) and the next turn must
           // carry on from the durable checkpoint: the history, the files, the resume id
           // the route refuses with 409 while the previous turn is still settling: ask again a few times
+          // The route refuses while a turn is still settling, and retrying the 409 for 30 s was not
+          // enough for a turn that runs long: mimo on gpt-5.6-luna had an artifact turn still
+          // `running` at 478 s, so the recycle row read "recycle refused: HTTP 409 a turn is
+          // running" — a sentence about this driver's patience, not about the base. Wait for the
+          // session's own record to be terminal first, and say so when it never is.
+          let settled = false;
+          for (let i = 0; i < 100; i++) { const d2 = await detailOf(rec.sid); if (TERMINAL.has(String(d2?.turn_status || d2?.status || ''))) { settled = true; break; } await sleep(3000); }
           let rc = { code: 0, body: '' };
-          for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
+          if (!settled) rc = { code: 0, body: 'the previous turn was still running after 300 s' };
+          else for (let i = 0; i < 6; i++) { rc = await page.evaluate(async (sid) => { const r = await fetch(`/api/harness/internal/sessions/${sid}/recycle`, { method: 'POST' }); return { code: r.status, body: (await r.text()).slice(0, 200) }; }, rec.sid); if (rc.code !== 409) break; await sleep(5000); }
           if (rc.code === 200) {
             await sleep(2000);
             const r5 = await turn('What exact word did I ask you to reply with in my very first message of this task? Reply with just that word.');
@@ -196,7 +225,15 @@ try {
           } else rec.recycle = { ok: false, s: 0, why: `recycle refused: HTTP ${rc.code} ${rc.body}`, recycled: rc };
           log(`RECYCLE ${k} ${rec.recycle.ok ? 'ok' : 'FAIL'} ${rec.recycle.s}s ${rec.recycle.why}`);
         } else { rec.followup = { ok: null, why: 'first turn failed' }; rec.switch = { ok: null, why: 'first turn failed' }; rec.artifact = { ok: null, why: 'first turn failed' }; rec.recycle = { ok: null, why: 'first turn failed' }; }
-      } catch (e) { rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`); if (/has been closed/.test(rec.error)) throw e; }   // a closed browser ends the worker; the next launch resumes
+      } catch (e) {
+        rec.error = String(e).slice(0, 300); log(`ERROR ${k} ${rec.error}`);
+        if (/browser has been closed/.test(rec.error)) throw e;   // the browser itself is gone: end the worker, the next launch resumes
+        if (CRASHED.test(rec.error) && !retried.has(k)) {
+          // one retry on a fresh page: the crash is this driver's, and the pair has not been measured
+          retried.add(k); log(`RECOVER ${k} rebuilding the page and running this pair again`);
+          try { await freshPage(); enabledQueue.push(m); } catch (e2) { log(`RECOVER failed: ${String(e2).slice(0, 160)}`); throw e; }
+        }
+      }
       // the record is complete: stamp the connection that served it, then let the session go. Its
       // workspace, checkpoint and trace are of no further use, and 170 of them per provider filled
       // a 62 GB disk (hr-oss-test, 2026-09-06).
