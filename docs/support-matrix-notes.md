@@ -2034,6 +2034,34 @@ The relay is the one that matters for rule 2: all five reached the provider thro
 placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
 gajae also names the served model itself, on every assistant message.
 
+### The Google column, and what a DIRECT provider showed that the aggregator hid (2026-10-11)
+
+Google's own OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai`),
+as the instance's ONLY integration, on the eight gemini ids it serves: **160 of 160 scenarios, all
+four bases 8/8**, no failure, nothing unmeasured, no driver error, `unlabelled` 0, no foreign
+connection, no substitution. The served id comes back BARE (`gemini-3.8-flash`, no vendor prefix),
+which is the direct path's own signature.
+
+This column exists because of a defect in this batch's first commit: it added
+`("google", <base>)` wiring for all four bases WITHOUT probing any of them, against the rule the
+same file states two hundred lines above it — "No ("google", "goose") row: unprobed is unlisted, and
+Gemini through this surface is a request-shape question the matrix has to answer first". The catalog
+was claiming google worked on four bases on no evidence. It now has evidence.
+
+**And it answers that request-shape question, the other way round from what the relay's own repair
+suggested.** nanobot's tool declarations are refused by Google's validator through VERCEL — the
+`anyOf: [array, null]` with no `items` that the reactive repair was written for — and on the direct
+endpoint the same declarations were accepted with no repair at all: zero relay refusals and zero
+"normalised them for Google's schema" lines anywhere in this column's window. The eight repairs in
+the log belong to the Vercel column, which is visible in their model names being vendor-prefixed
+(`google/gemini-3.1-flash-lite`) where this column's are bare, and in their timestamps. So the
+missing `items` is the AGGREGATOR's translation, not Google being strict, which is what the comment
+above `_GEMINI_SCHEMA_KEYS` said in the first place and now has direct evidence for.
+
+That is also the case for keeping the repair REACTIVE rather than proactive on every channel: the
+direct path does not need it, and applying it there would flatten an `anyOf` that this provider
+handles faithfully.
+
 ### The driver was judging three of its five scenarios on its own prompt (2026-10-11)
 
 Read this before reading any column in this file, including the ones that predate this batch: the
@@ -2096,7 +2124,8 @@ not offered and is in none of them (see the write-wall section below).
 
 | dimension | mimo | jcode | opensquilla | nanobot |
 |---|---|---|---|---|
-| five scenarios × ALL 50 served ids | 48/50 | 50/50 | 49/50 | 49/50 |
+| five scenarios × ALL 50 served ids (Vercel) | 48/50 | 50/50 | 49/50 | 49/50 |
+| five scenarios × 8 gemini ids (Google, direct) | 8/8 | 8/8 | 8/8 | 8/8 |
 | custom-harness (own skill, own script, tool policy, MCP) | ok | ok | ok | ok |
 | plugin: skills / mcp / sse / http | 4/4 | 4/4 | 4/4 | 4/4 |
 | browser (one task in plain words, through the plugin) | ok | ok | ok | ok |
@@ -2120,7 +2149,7 @@ so every turn carried a served model off the relay, and no substitution survived
   failed — so the rows stay as measured with the retries recorded beside them.
 - **jcode's 3 of 12 is the limit written up above**: its fourth family ran away and was killed at the
   tour's cap, and every family after it stayed on the killed turn's model.
-- Still not measured: any connection other than Vercel. The tour's families were PROBED first,
+- Still not measured: any connection other than Vercel and Google. The tour's families were PROBED first,
   one short turn each, because a family this connection cannot serve would fail a tour for a reason
   that says nothing about the base: twelve of thirteen answered. llama-3.3-70b was refused by this
   instance with "no provider configured for backend 'mimo'" — this org holds one integration, which
