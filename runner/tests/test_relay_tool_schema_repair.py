@@ -68,3 +68,31 @@ def test_vercel_is_still_not_a_proactive_channel():
     # every anyOf for every base on it would lose what it was getting right.
     assert not S._gemini_channel("https://ai-gateway.vercel.sh/v1")
     assert S._gemini_channel("https://api.tokenrouter.com/v1")
+
+
+# ── the memo that stops every turn paying for the same refusal ───────────────────────────
+# Each turn gets its own relay route, so a flag on the route is forgotten at the next turn: the run
+# that found this paid one refused round trip per turn, four turns in a row. The repair is remembered
+# for the runner's life instead, keyed by upstream host and model. Nothing else pins that key, and a
+# memo that silently stopped matching would only cost an extra round trip per turn — the kind of
+# regression no column would ever show.
+
+def test_the_memo_is_keyed_by_upstream_host_and_model_not_by_the_whole_url():
+    a = S._gemini_schema_key("https://ai-gateway.vercel.sh/v1", "google/gemini-3.6-flash")
+    # the same channel and model reached through another path is the same channel and model
+    b = S._gemini_schema_key("https://ai-gateway.vercel.sh/v1/chat/completions", "google/gemini-3.6-flash")
+    assert a == b == ("ai-gateway.vercel.sh", "google/gemini-3.6-flash")
+
+
+def test_the_model_is_matched_without_case_and_a_different_one_is_a_different_key():
+    k = S._gemini_schema_key("https://x.example/v1", "Google/Gemini-3.6-Flash")
+    assert k == ("x.example", "google/gemini-3.6-flash")
+    assert k != S._gemini_schema_key("https://x.example/v1", "google/gemini-3.8-flash")
+    # and the normalisation is NOT applied on a guess to a model that has not refused
+    assert S._gemini_schema_key("https://x.example/v1", "") == ("x.example", "")
+
+
+def test_another_channel_serving_the_same_model_is_not_assumed_to_refuse_too():
+    assert (S._gemini_schema_key("https://ai-gateway.vercel.sh/v1", "google/gemini-3.6-flash")
+            != S._gemini_schema_key("https://generativelanguage.googleapis.com/v1beta/openai",
+                                    "google/gemini-3.6-flash"))

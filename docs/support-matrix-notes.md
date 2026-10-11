@@ -1888,12 +1888,12 @@ turn at a time. It says each base works; the column above is what says each MODE
   Measured on 2026-10-07 with mimo as a flat-layout control in the same run: two turns in one
   session, haiku then gemini — jcode served `anthropic/claude-haiku-4.5` twice, mimo served each as
   asked. The family tour served ALL TWELVE of jcode's families with `openai/gpt-5.4` and scored it
-  12 of 12, and the five-scenario column had the same evidence and passed it too: every jcode pair's
+  12 of 12, and the EIGHT-MODEL column had the same evidence and passed it too: every jcode pair's
   `served` list held ONE entry where every mimo pair's held two. Both judges now read the served
   model (`run.mjs` fails a switch row unless the turn naming the partner was served by it;
   `family-tour.mjs` requires the family's own model), and `_jcode_session_model` points the session
-  store at this turn's model before `--resume` reads it. After: the column is 8/8 with two served
-  entries per pair.
+  store at this turn's model before `--resume` reads it. After: that eight-model column went to 8 of
+  8 pairs with two served entries each, and the full 50-id column (above) is 50 of 50.
 
   **What that does not fix, and will not be fixed from here: a turn after a KILLED turn stays on the
   killed turn's model.** Reproduced deterministically with the same control — A on gpt-5.4 served
@@ -2132,12 +2132,16 @@ not offered and is in none of them (see the write-wall section below).
 | environments (pip, npm and apt from the layer, no install) | 3/3 | 3/3 | 3/3 | 3/3 |
 | family tour, 12 families in one conversation | 12/12 | 3/12 | 11/12 | 11/12 |
 
-The browser column needs a browser: this instance had none when it first ran and all four bases
+Both of those were re-run with all four bases on ONE build after the two nanobot fixes they
+exposed, rather than left as "three bases before the fix and nanobot after it": the fixes are
+nanobot-only by construction, but that is an argument where a 16-turn re-run is a measurement.
+
+The browser column needs a browser, and this instance had none when it first ran: all four bases
 failed on "navigate: not configured", which says nothing about any base. The runs above use the
 operator's-own-browser configuration — `HR_BROWSER_CDP_URL` against a headless Chromium in the
-container — and not the browser-use vendor key; the two are different paths and a row proved on one
+container — and NOT the browser-use vendor key; the two are different paths and a row proved on one
 is not proof for the other. The environments column ran on one layer carrying tabulate (pip),
-qrcode (npm) and jq (apt), and every passing row did it with zero install commands in the trace.
+qrcode (npm) and jq (apt), and every row used them with zero install commands in the trace.
 
 Rule 2 is not merely answerable on these bases now, it was READ: `unlabelled` is 0 on all 32 pairs,
 so every turn carried a served model off the relay, and no substitution survived `samemodel`.
