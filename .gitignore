@@ -21,3 +21,8 @@ protocol/site/dist/
 # two of them are symlinks into /tmp/pytest-of-root/... The id is a short [a-z0-9_-] token
 # (environments._ID_SAFE), so the prefix is the stable part.
 runner/henv*/
+
+# The matrix driver's own lockfile. package.json is tracked and the README asks the operator to
+# `npm install` next to run.mjs, so the lock has never been in the tree — and a `git add -A` after
+# installing playwright committed it twice in this branch before this rule existed.
+scripts/support-matrix/package-lock.json
