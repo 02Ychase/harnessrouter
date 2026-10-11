@@ -2158,9 +2158,14 @@ so every turn carried a served model off the relay, and no substitution survived
   that says nothing about the base: twelve of thirteen answered. llama-3.3-70b was refused by this
   instance with "no provider configured for backend 'mimo'" — this org holds one integration, which
   is not a statement about what Vercel serves — so the tour covered twelve. muse is deliberately absent from these runs and no muse credential was used.
-  Note that "Five ids Vercel does not serve at all" earlier in this file names `hunyuan-4-preview`,
-  and this probe was served it as `tencent/hy4-preview` — that passage is a 2026-09-16 measurement
-  and is out of date at least for that id.
+  **"Five ids Vercel does not serve at all" earlier in this file is out of date for ALL FIVE.** That
+  passage is a 2026-09-16 measurement; the full column of 2026-10-11 ran every one of them and each
+  answered and passed 5 of 5 — `claude-fable-5-1` as `anthropic/claude-fable-5.1`,
+  `gemini-3-flash-preview` as `google/gemini-3-flash`, `grok-4.20` as `spacexai/grok-4.20-reasoning`,
+  `hunyuan-4-preview` as `tencent/hy4-preview`, `nemotron-3-super` as
+  `nvidia/nemotron-3-super-120b-a12b`. Every one of those is the provider renaming the model and
+  `samemodel` resolves all five, which is why this column reports no substitution. A provider's
+  coverage is a dated measurement and not a property of the id.
 
 ## The disabled tool is the base's own, and the label on the instructions box is the runner's (2026-10-03)
 
