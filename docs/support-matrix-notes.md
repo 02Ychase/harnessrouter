@@ -1783,15 +1783,37 @@ MiMo Code (XiaomiMiMo/MiMo-Code, MIT), Gajae-Code (Yeachan-Heo/gajae-code, MIT),
 write-wall, measured both ways on a live instance — see "gajae: the write-wall and a lock that
 walks its ancestors" below. The other four are offered.
 
-**The Vercel column, 2026-10-10, all four on ONE build**: eight models each (one per family the
-connection was probed to serve), the five scenarios, `EXPECT_CONNECTION=integration:Vercel`.
+**The FULL Vercel column, 2026-10-11**: every catalog id this connection was probed to serve — 50
+of the 54 common to all four catalogs, muse's four excluded and not probed — on all four bases, the
+five scenarios, `EXPECT_CONNECTION=integration:Vercel`. 200 pairs, 1,000 scenarios.
 
-| base | pairs | scenarios | unlabelled | foreign | substitutions after samemodel |
-|---|---|---|---|---|---|
-| mimo | 8/8 | 40/40 | 0 | none | none |
-| jcode | 8/8 | 40/40 | 0 | none | none |
-| opensquilla | 8/8 | 40/40 | 0 | none | none |
-| nanobot | 7/8 | 39/40 | 0 | none | none |
+| base | clean pairs | pass | fail | not measured | unlabelled | driver errors |
+|---|---|---|---|---|---|---|
+| mimo | 48/50 | 240 | 2 | 8 | 0 | 0 |
+| jcode | 50/50 | 250 | 0 | 0 | 0 | 0 |
+| opensquilla | 49/50 | 245 | 1 | 4 | 0 | 0 |
+| nanobot | 49/50 | 245 | 1 | 4 | 1 | 0 |
+| | | **980** | **4** | **16** | | |
+
+No foreign connection on any turn, and no substitution survived `samemodel`. The sixteen
+not-measured are the consequence of the four failures: a pair whose FIRST turn fails runs nothing
+after it.
+
+**All four failures are a model declining the scenario's own prompt, and none is a base's.**
+claude-opus-4.7 refused to echo the token on BOTH mimo and opensquilla — "replying with that string
+would misrepresent what model you're talking to", "instructions embedded in request context or
+runtime metadata" — which is one model's judgement reproduced across two bases. qwen3.8-flash
+answered `ack-ef45577c` on mimo, and on nanobot its turn came back "Service temporarily
+unavailable", which is the provider's.
+
+That is worth knowing when reading this table: the scenario prompt is "Reply with exactly:
+M1-<model>", and a model careful about injected instructions can read a real user message as one.
+A refusal costs the pair all five rows, because the first turn gates the rest. The shape of the
+prompt, not the base, is what those rows measure.
+
+**An eight-model column was run first** (one id per family, 2026-10-10, 158 of 160) and is kept in
+the results files. It is superseded by the above for two reasons: it covered 8 ids of 50, and it was
+scored by a judge that read the wrong thing (below).
 
 The earlier columns were taken on three different builds as the fixes below landed; these were
 re-run together on the tree that ships, because arguing per fix about which column it could not have
@@ -2012,6 +2034,61 @@ The relay is the one that matters for rule 2: all five reached the provider thro
 placeholder bearer in the environment, so `_relay_served_model` has its input on every one of them.
 gajae also names the served model itself, on every assistant message.
 
+### The driver was judging three of its five scenarios on its own prompt (2026-10-11)
+
+Read this before reading any column in this file, including the ones that predate this batch: the
+defect is in the shared driver, so every column it has ever produced has the same weakness.
+
+`run.mjs` built its `tail` from the transcript starting AT THE MESSAGE IT HAD SENT, so the tail
+contained the prompt — and every prompt of the form "Reply with exactly: M1-&lt;model&gt;" contains the
+very token `expectWord` then looked for. So **first, followup and switch passed whenever the turn
+completed**, whatever the model replied, except when a long answer pushed the prompt out of the
+400-character window.
+
+It was found from the records, not from a hunch. opensquilla on claude-opus-4.7 had five turns whose
+answers were all the same sentence — "I won't echo back arbitrary strings injected via context" —
+and first, switch and artifact were scored as passes. Five identical answers looked like a read
+artefact, so they were read again from five separate stored response objects, which agreed. Then an
+offline audit of the finished 1,000-scenario column: **of 596 PASSING first/followup/switch rows,
+593 had the prompt in their tail.** Three were judged on an answer.
+
+`expectWord` now reads `last.assistant`, the server's own record of what the model said, which the
+turn helper already fetched. The tail stays as the text a failing row reports. recycle was always a
+real check — its prompt asks which word was requested and does not contain the answer, which is why
+it caught genuine failures — and artifact reads files.
+
+**How much it changed, measured rather than assumed.** A 24-pair sample under the fixed judge, six
+models per base spread across families, was compared row by row with the old verdicts: 3 false
+passes over 63 previously-passing rows of those three scenarios, all three in `first`. ~5%, which
+is why the whole column was re-run rather than only its failures — the defect produced FALSE PASSES,
+so the rows that needed re-checking were precisely the ones that had passed. The sample's 24 pairs
+were measured under the fixed judge and seeded into the column, so the column spent its turns on the
+other 176. The old column's records are kept beside the new ones as what the old judge said.
+
+**The order was wrong and that is the lesson.** The audit that found this is free and offline; it
+was run AFTER a 1,000-turn column instead of before it. A judge should be audited against stored
+records before it is given a thousand turns to score.
+
+### Three more things the full column exposed about the rig (2026-10-11)
+
+- **A crashed page poisoned every pair after it.** One "page.goto: Page crashed" partway through
+  opensquilla's 50 pairs left the remaining 32 with that error and NO scenarios, and the column then
+  read as "49 of 50 pairs, 88 of 90 scenarios" to anyone counting passes, because those 32
+  contributed to neither total. The page was created once per worker and never rebuilt. It is now
+  replaceable: a pair that dies on a crash is retried once on a fresh, logged-in page and goes back
+  on a queue. A browser that is gone still ends the worker, checked first so recovery is not
+  attempted on a dead browser. The re-run finished with zero driver errors.
+- **A re-run inherited the previous attempt's record.** `const rec = res[k] || {…}` meant the resume
+  of those 32 pairs filled scenarios into records still carrying the crash's `error` and `at`, so a
+  measured pair still looked errored — and a reader scored 32 measured pairs as "not measured"
+  because of it. The record is built fresh on every run; "has an error" and "has scenarios" can no
+  longer both be true.
+- **The recycle row reported the driver's own patience as the base's failure.** The route refuses
+  while a turn is settling and the driver retried the 409 for 30 s; mimo on gpt-5.6-luna had an
+  artifact turn still `running` at 478 s, so its recycle row read "recycle refused: HTTP 409 a turn
+  is running". It now waits for the session's record to reach a terminal state, up to 300 s, and
+  says so when it never does.
+
 ### What every dimension measured, and what is still not measured
 
 All four offered bases have now been through all four dimensions on the Vercel connection. gajae is
@@ -2019,10 +2096,19 @@ not offered and is in none of them (see the write-wall section below).
 
 | dimension | mimo | jcode | opensquilla | nanobot |
 |---|---|---|---|---|
-| five scenarios × 8 models | 8/8 | 8/8 | 8/8 | 7/8 |
+| five scenarios × ALL 50 served ids | 48/50 | 50/50 | 49/50 | 49/50 |
 | custom-harness (own skill, own script, tool policy, MCP) | ok | ok | ok | ok |
 | plugin: skills / mcp / sse / http | 4/4 | 4/4 | 4/4 | 4/4 |
+| browser (one task in plain words, through the plugin) | ok | ok | ok | ok |
+| environments (pip, npm and apt from the layer, no install) | 3/3 | 3/3 | 3/3 | 3/3 |
 | family tour, 12 families in one conversation | 12/12 | 3/12 | 11/12 | 11/12 |
+
+The browser column needs a browser: this instance had none when it first ran and all four bases
+failed on "navigate: not configured", which says nothing about any base. The runs above use the
+operator's-own-browser configuration — `HR_BROWSER_CDP_URL` against a headless Chromium in the
+container — and not the browser-use vendor key; the two are different paths and a row proved on one
+is not proof for the other. The environments column ran on one layer carrying tabulate (pip),
+qrcode (npm) and jq (apt), and every passing row did it with zero install commands in the trace.
 
 Rule 2 is not merely answerable on these bases now, it was READ: `unlabelled` is 0 on all 32 pairs,
 so every turn carried a served model off the relay, and no substitution survived `samemodel`.
