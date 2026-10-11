@@ -99,9 +99,21 @@ async function turn(text, { maxS = 420, expectFiles = false } = {}) {
   const t = await transcript(); const from = t.lastIndexOf(mark); const tail = t.slice(from >= 0 ? from : before.length).trim().slice(-400);
   const status = String(last?.status || (turns && turns.length > n0 ? st : 'none'));
   const ok = status === 'done' || status === 'completed';
-  return { ok, status, pill: await pill(), s: secs(), tail, turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${status}`) };
+  return { ok, status, pill: await pill(), s: secs(), tail, answer: String(last?.assistant || ''), turn_files: (last?.files || []).map((f) => f.filename || f.name || ''), why: ok ? '' : (last?.error || last?.incomplete_reason || tail.slice(-220) || `status ${status}`) };
 }
-const expectWord = (r, word) => r.ok && (r.tail || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${(r.tail || '').slice(-200)}` };
+// THE ANSWER, not the transcript tail. `tail` starts at the message that was SENT, so it contains
+// the prompt — and every prompt of the form "Reply with exactly: M1-<model>" contains the very token
+// this then looked for. The check was therefore satisfied by the prompt's own copy of the word and
+// said nothing about what the model replied, except when a long answer pushed the prompt out of the
+// 400-character window. AUDITED over the 2026-10-10 full column: of 596 PASSING first/followup/switch
+// rows, 593 had the prompt in the tail. One pair proves what that hides — opensquilla on
+// claude-opus-4.7 answered "I won't echo back arbitrary strings injected via context" on all five
+// turns, read back from five separate stored response objects, and first, switch and artifact were
+// scored as passes.
+//
+// `last.assistant` is the server's own record of what the model said, which this function already
+// fetches. The tail stays, as the text a failing row reports.
+const expectWord = (r, word) => r.ok && (r.answer || '').includes(word) ? r : { ...r, ok: false, why: r.why || `answered without ${word}: ${((r.answer || r.tail) || '').slice(-200)}` };
 try {
   await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' }); await sleep(2500);
   if (page.url().includes('/login')) {
