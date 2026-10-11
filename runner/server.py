@@ -919,8 +919,9 @@ def _agent_subdir_set(ws: str, sub: str) -> None:
         m = pathlib.Path(ws) / _AGENT_SUBDIR_MARKER
         m.parent.mkdir(parents=True, exist_ok=True)
         m.write_text(sub)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 — without the marker _visible_root is the session dir, so the
+        pass            # produced list keeps the workspace/ prefix and GET /file finds the file by
+                        # its fallback: the turn still works, it just reads as it did before.
 
 
 def _visible_root(ws: str) -> str:
@@ -7462,8 +7463,8 @@ def _opensquilla_transcript(state: dict) -> list[dict]:
             continue
         try:
             msg = (json.loads(raw) or {}).get("message") or {}
-        except Exception:  # noqa: BLE001
-            continue
+        except Exception:  # noqa: BLE001 — one unparseable line in a transcript the CLI is still
+            continue       # appending to is a line, not a turn: skip it and read the rest.
         role = msg.get("role")
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
         if role == "assistant":
@@ -7983,10 +7984,10 @@ def _jcode_session_model(env: dict, session_id: str, model: str) -> str:
         os.chmod(tmp, st.st_mode & 0o7777)
         os.chown(tmp, st.st_uid, st.st_gid)
         os.replace(tmp, path)
-    except Exception:  # noqa: BLE001
-        try:
-            tmp.unlink()
-        except OSError:
+    except Exception:  # noqa: BLE001 — the store is jcode's, not ours: if it cannot be rewritten the
+        try:           # turn runs on the model the session already held, which is the behaviour
+            tmp.unlink()   # before this function existed, and the temp file goes rather than staying
+        except OSError:    # beside a file jcode will read.
             pass
         return ""
     return was

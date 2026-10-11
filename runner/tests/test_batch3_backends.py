@@ -567,8 +567,10 @@ def test_real_gajae_turn_that_the_provider_refused():
     evs, res = _replay(_gajae_to_claude, "gajae-provider-401.ndjson", "openai/gpt-6-luna")
     assert res["is_error"] is True
     assert res["result"].startswith("401 Authentication failed")
-    # and the failure is NOT rendered as the assistant's answer
-    assert not any(e.get("type") == "assistant" for e in evs)
+    # and the failure is NOT rendered as the assistant's answer. Pinned by the event TYPES rather
+    # than by "no assistant event": the second form also passes on an empty list, and a normaliser
+    # that emitted nothing at all would then look correct here.
+    assert [e.get("type") for e in evs] == ["system", "result"]
 
 
 def test_real_jcode_turn_sums_the_usage_its_own_done_event_under_reports():
