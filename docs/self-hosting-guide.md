@@ -6,6 +6,7 @@ Detailed installation, configuration, API, and deployment instructions. For the 
 
 - [Install](#install)
 - [Restarts, upgrades, and backups](#restarts-upgrades-and-backups)
+- [What a delete removes, and when](#what-a-delete-removes-and-when)
 - [Starter kits](#starter-kits)
 - [Plugins](#plugins)
 - [Environments](#environments)
@@ -161,7 +162,7 @@ Wait for `ready on :3000`, then open the browser:
 [harnessrouter] installing goose (Apache-2.0)…
 [harnessrouter] installing DeepSeek Harness (MIT, developer preview — version-pinned)…
 [harnessrouter] installing Hermes (check its upstream license before use)…
-[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp goose kimi
+[harnessrouter] data=/data  backends available: claude codex hermes pi dsh opencode qwen gemini cline omp goose kimi grok
 [harnessrouter] ready on :3000
 ```
 
@@ -252,7 +253,10 @@ A model that shipped after this release is one row away: open the integration, a
 the id the provider uses on the wire, and save. It appears in every model picker the provider
 drives, and a task may name it. A task that names a model no connected provider serves on that
 base is refused before it starts (`400 model_not_available`), never run on another model;
-`GET /v1/harnesses/{id}/models` lists what a harness can run.
+`GET /v1/harnesses/{id}/models` lists what a harness can run. A harness is held to the same rule
+when it is saved: a default model its base does not run is refused (`422 model_not_available`, with
+the base's models), and so is a field a harness does not have (`422`, naming the field and the
+nearest one it has). A harness read with `GET` and sent back as it came saves.
 
 <details>
 <summary>Running more than one provider</summary>
@@ -355,18 +359,60 @@ offers you providers that work.
 
 | Connection `provider` | Backends that can use it |
 |---|---|
-| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, System One, CheetahClaws |
-| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, Aider, OpenHands |
+| `anthropic` | Claude Code, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
+| `openai` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
+| `openrouter` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, System One, CheetahClaws |
+| `azure-foundry` | Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
+| `google` | Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero |
 | `typesafe` | System One (Jev on TypeSafe's own API: `jev-latest`, `jev-preview`) |
 | `bedrock` | Claude Code, Hermes |
-| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws |
-| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
-| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws |
-| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands |
-| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, Aider, OpenHands, CheetahClaws (OpenAI format) |
+| `tokenrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
+| `harnessrouter` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Gemini CLI, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot, System One (the open-weight models `laya`, `openthai-systemone` and `system-one-phase2`, served by the hosted service and billed to the key's credits) |
+| `vercel` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, CheetahClaws, MiMo Code, jcode, OpenSquilla, nanobot |
+| `llmtr` | Claude Code, Codex, Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot |
+| `custom` | Claude Code, Codex (Responses format), Hermes, Pi, DeepSeek Harness, OpenCode, Kilo Code, Qwen Code, Cline, Oh My Pi, goose, Kimi Code CLI, MiniMax Code, Grok Build, Aider, OpenHands, Agent Zero, MiMo Code, jcode, OpenSquilla, nanobot, CheetahClaws (OpenAI format) |
+
+</details>
+
+<details>
+<summary>An Azure connection without an API key (Microsoft Entra)</summary>
+
+For an organization that issues no API keys for its Azure resources. The connection is an application
+in your own Entra directory, and tasks sign in as that application.
+
+Register it once and give it a role on the resource it may call:
+
+```bash
+APP=$(az ad app create --display-name "HarnessRouter models" --sign-in-audience AzureADMyOrg --query appId -o tsv)
+az ad sp create --id "$APP" >/dev/null
+RESOURCE=$(az cognitiveservices account show -g <resource group> -n <resource name> --query id -o tsv)
+az role assignment create --assignee "$APP" --role "Cognitive Services OpenAI User" --scope "$RESOURCE"
+az ad app credential reset --id "$APP" --append --display-name harnessrouter --years 1 --query password -o tsv
+```
+
+The last line prints the client secret once. On the **Integrations** page add an **Azure OpenAI**
+connection, set **Sign in with** to **Microsoft Entra**, and enter the endpoint URL, the directory
+(tenant) ID, the application (client) ID and the client secret. A role assignment can take a few
+minutes to take effect.
+
+What happens on a task: the gateway asks Microsoft Entra for a token as the application, keeps it
+until shortly before it expires, and presents it on each model call in place of an API key. The agent
+holds neither the secret nor the token. That is true even though this image hands an API key
+connection straight to the agent (`HR_SANDBOX_TRUST=owner`): a token lives for about an hour and a
+task can run for longer, so a connection of this kind always goes through the gateway, which asks
+again as the token ages.
+
+When the sign-in is refused, the task fails with Entra's own reason, for example
+`Your azure connection was refused: ... Microsoft Entra refused this connection's sign-in: AADSTS90002: Tenant '...' not found`.
+When the application has no role on the resource, the reason is Azure's:
+`The principal ... lacks the required data action Microsoft.CognitiveServices/accounts/OpenAI/responses/write`.
+A directory or application ID that is not a GUID, or a missing secret, is refused when you save.
+
+The same role serves a Foundry resource (kind `AIServices`); its endpoint is
+`https://<resource>.services.ai.azure.com`. A connection reaches the models deployed on the resource
+under the names this instance knows them by.
+
+A sovereign cloud sets `HR_ENTRA_AUTHORITY` (default `https://login.microsoftonline.com`).
 
 </details>
 
@@ -420,6 +466,45 @@ Stop the container before copying the volume so the SQLite databases and files f
 backup. Preserve the volume's permissions and keep any configured encryption key securely
 alongside your deployment records. Restore the volume and the same configuration before starting
 the replacement instance.
+
+## What a delete removes, and when
+
+Deleting follows one rule on this instance, the same as on the hosted service. Some things go at
+once and cannot be brought back; the others are kept for 30 days, can be restored by whoever runs
+the instance, and are then removed.
+
+| What is deleted | What happens |
+|---|---|
+| A task (a session) | Removed at once, for good: its conversation and trace, its responses, the files it produced and their previews, its list of changed files, its media, the record of every plugin call it made, its checkpoint and its working folder. A marker that holds its id and the time of the delete, and nothing of its content, stays for a day so that a turn still finishing cannot write it back, then goes too. |
+| An API key | Removed at once. It stops working immediately and leaves the list of keys. |
+| A credential | Removed at once: a plugin's stored secrets when the plugin is removed, a database connection when it is removed from a harness or its harness is deleted, a stored tool token deleted with `DELETE /v1/mcp-secrets/{ref}`. |
+| A harness | Kept 30 days, then removed with its skill bundles and plugin packages. A restored harness comes back without its credentials, since those went at once. The tasks and responses that used it are kept. |
+| A response deleted on its own | Unreadable at once, kept 30 days, then removed. A response of a deleted task goes with the task. |
+| An environment | Its `/env/<name>` path goes at once, so no task sees it and the name is free; its files and builds are kept 30 days, then removed. |
+| An upload (`DELETE /v1/files/{id}`) | Refused to new tasks at once, kept 30 days, then removed. |
+
+Nothing that has not been deleted expires. The server removes what has come due when it starts and
+once a day after that. The first start of 0.32.0 removes what earlier versions only marked as
+deleted more than 30 days before, and what tasks deleted before 0.32.0 left behind. Earlier
+versions did not keep the time of a delete, so such a record counts from its last activity: for a
+harness, the later of its last change and the last task it ran; for a response, when it was made. **Back up the volume before upgrading
+to 0.32.0** if anything deleted earlier should be kept.
+
+Backups are the caveat to all of this. Removing something from the instance does not remove it
+from a copy of the volume taken before the delete: a backup keeps whatever it held, for as long
+as the backup is kept. Rotate backups to match the promise you make to the people using the
+instance.
+
+To see what is due, remove it now, or bring something back within its 30 days:
+
+```bash
+docker exec harnessrouter hr-retention                                # what is due (removes nothing)
+docker exec harnessrouter hr-retention sweep                          # remove it now
+docker exec harnessrouter hr-retention restore harnesses chrn_...     # or responses, environments, uploads
+```
+
+An environment cannot be restored while another environment holds its name; rename that one
+first.
 
 ## Starter kits
 
@@ -867,12 +952,20 @@ Backends are installed into your data volume rather than baked into the image, s
 want is a run-time setting:
 
 ```bash
-docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,qwen,gemini,cline,omp,goose,kimi,aider,openhands,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot ...  # the default
+docker run -e HR_BACKENDS=claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot ...  # the default
 docker run -e HR_BACKENDS=opencode ...                             # lean
 ```
 
-Aider and OpenHands are the largest of the set: each environment is about 700 MB and takes a minute
-or two to install on a fresh volume. Leave either out of `HR_BACKENDS` if you will not use it.
+Aider, OpenHands and Agent Zero are the largest of the set: each environment is 600-700 MB and takes
+a minute or two to install on a fresh volume. All three are in the default list anyway, because the
+console offers every base the catalogue lists and a base that did not install fails on its first
+task; leave any of them out of `HR_BACKENDS` if you will not use it.
+
+Agent Zero (`agentzero`) is a framework rather than a CLI, so it is installed from its tagged source
+archive (digest-pinned) into a virtualenv rather than from a package registry: 569 MB of virtualenv
+and 69 MB of source, 83 seconds on a fresh volume (measured on Linux arm64). It takes upstream's own
+dependency pins, minus the packages that serve only what this base switches off (local embeddings and
+speech, which would bring torch; document parsing; the browser; its messaging integrations).
 
 A backend that fails to install is not fatal: the others still work. The console offers every
 base the gateway's catalogue lists, so a task on a backend that did not install fails on its
@@ -898,7 +991,12 @@ docker build -t harnessrouter --build-arg WITH_BROWSER=1 .
 | `HR_SANDBOX_TRUST` | `owner` | You own the box, the agent and the key, so the key is handed over directly rather than brokered. |
 | `HARNESS_WORKSPACE` | `/data/workspaces` | One directory per session, on the volume, so a restart doesn't discard work in flight. |
 | `HR_WORKSPACE_TTL_HOURS` | `72` | Idle session workspaces are removed after this. They rehydrate from their checkpoint, so this costs time, not work. `0` keeps them forever. |
+| `HR_RELAY_UPSTREAM_TIMEOUT_S` | `600` | How long one model call may go without sending anything before the task is told the provider did not answer. Several model APIs send nothing while a model thinks (OpenAI's Chat Completions sends nothing at all), so a shorter wait cuts long thinking off. Lower it only if you would rather end a stuck call sooner than wait out a long think. It was `180` in 0.31.0 only. |
+| `HR_ENTRA_AUTHORITY` | `https://login.microsoftonline.com` | Where an Azure connection that signs in with Microsoft Entra asks for its token. A sovereign cloud names its own. |
+| `HARNESS_RESP_HOLD_S` | `3` | How long the gateway lets the runner hold a request for a turn's events. `0` asks every 1.2 s as before 0.30.1. |
 | `HARNESS_INTERNAL_KEY` | generated | Per-container; never leaves the process tree. |
+
+Outside this image the gateway's own default for `HR_IDENTITY_MODE` is `enforce`: a request that carries the internal key beside a sign-in token is answered as the organization and member the token proves, and refused when the token does not verify. Set `off` only where, as here, the console in front of the gateway pins the one organization itself.
 
 </details>
 
@@ -935,6 +1033,11 @@ variables. It is a setup check, not a technical prerequisite for the API.
 3. Copy the secret shown once. Store it in your product backend's secret store or environment. The examples call this variable `HARNESSROUTER_API_KEY`.
 
 The key is scoped to the selected workspace and can be rotated or revoked on the same page.
+A key made in a workspace other than the Default Workspace reaches that workspace and nothing else:
+a harness, a task, a file or a response of another workspace is answered `404`, the same as an id
+that does not exist, and such a key makes new keys for its own workspace only. A key made in the
+Default Workspace, and an organization key (the **Reach** choice when you create a key), reach every
+workspace of the organization. A built-in base (`codex`, `claude-code`, ...) runs with any key.
 It is created in this self-hosted instance and authenticates requests to that CE deployment. It is
 neither a Cloud key, your Console password, nor the model-provider key configured
 in **Integrations**. Never put it in browser-side code or commit it to Git.
@@ -967,7 +1070,7 @@ To add a plugin to a harness that already exists, remember that `PUT /v1/harness
 the whole mutable configuration: any field you leave out is cleared, and an omitted `mcp_servers`
 also removes the hosted tools behind it. Read the harness first, then send back its current
 `system_prompt`, `default_model`, `mcp_servers`, `skills`, `disabled_tools`, `additional_headers`,
-`max_step` and `timeout_seconds` (the write body uses these snake_case names; the record you read
+`max_step`, `timeout_seconds` and `reasoning_effort` (the write body uses these snake_case names; the record you read
 uses camelCase) with the new package appended to `plugins`. Installed plugins round-trip as
 `{name, enabled, blob}`, so send those back unchanged and add the new one beside them.
 
@@ -1036,6 +1139,33 @@ back at once with the task's id and `status: in_progress`, and `GET /v1/response
 it until it ends. Attached files land in the task's working directory under the name you give;
 a relative path in `filename` (`inputs/report.pdf`) puts the file in that folder.
 
+**How much the model thinks.** A task can say it, with the Responses API's own field:
+
+```bash
+curl -sS "$HR/api/harness/v1/responses" -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{"input": "...", "metadata": {"harness_id": "hrn_..."}, "reasoning": {"effort": "low"}}'
+```
+
+The levels are `none`, `minimal`, `low`, `medium`, `high` and `xhigh`. A harness can keep a default
+for its tasks (`reasoning_effort` on the harness, the Thinking control on its settings page) and a
+task's own level wins. Models do not all have the same levels: `GET /v1/bases` lists, per base and
+model, the ones each has (`models[].reasoning`), and a model asked for a level it lacks gets the
+nearest one it has. A model that cannot be turned off gets its lowest level for `none`; a task
+that asked for some thinking is never given none. The response says what happened:
+
+```json
+"reasoning": {"effort": "minimal", "applied": "low"},
+"usage": {"output_tokens": 262, "output_tokens_details": {"reasoning_tokens": 248}}
+```
+
+`applied` is `"default"` when nothing could be set: the model has no measured level on the
+connection that served it, or the provider refused the level, in which case the call was made
+again without it rather than failed. `reasoning_tokens` is the provider's own count and is absent
+where the provider gives none. A task and a harness that set no level send what they sent before
+levels existed. Which setting moves which model on which provider was measured, not assumed; the
+table and the method are in [support-matrix-notes.md](support-matrix-notes.md), "How much a model
+thinks".
+
 <details>
 <summary>The rest of the surface</summary>
 
@@ -1050,6 +1180,7 @@ All paths below are relative to the API base above and use the same Bearer key.
 | Read session history | `GET /v1/sessions/{session_id}/turns` |
 | Upload inputs or retrieve outputs | `POST /v1/files`; `GET /v1/sessions/{session_id}/files` |
 | Cancel work | `POST /v1/responses/{response_id}/cancel` |
+| Delete | `DELETE /v1/sessions/{session_id}`, `DELETE /v1/responses/{response_id}`, `DELETE /v1/harnesses/{harness_id}`, `DELETE /v1/files/{file_id}`, `DELETE /v1/mcp-secrets/{ref}`; what each removes and when is in [What a delete removes, and when](#what-a-delete-removes-and-when) |
 | Describe the API | `GET /v1/openapi.json`, the surface above as an OpenAPI document, readable without a login |
 | Inspect execution | `GET /v1/sessions/{session_id}/turns` for the turns; `GET /v1/traces/{session_id}/all` for the stored event stream of the harness as newline-delimited JSON, one event per line (`content-type: application/x-ndjson`; assistant, tool and result events as the CLI emitted them); `/v1/traces/{session_id}/events?chunk=N` reads one stored chunk. Provider-call spans (the model requests behind a turn) are part of the hosted service's observability, not of this edition |
 

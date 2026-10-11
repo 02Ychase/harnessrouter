@@ -2,6 +2,173 @@
 
 All notable changes to the Unified Harness Protocol.
 
+## Conformance suite 2026.10.4.post9 (2026-10-06)
+
+No change to the protocol, the schema or any verdict a conformant server gets.
+
+A check that quotes the server's answer in its failure message could not read it. Eighteen messages,
+reached by eight of the nine Environments checks and all ten Memories checks (in the check itself or
+in a helper they share), were built from `r.text`, and a client result had `body`, `json` and
+`header()` but no `text`. A message is
+evaluated only when its assertion fails, so nothing showed against a conformant server. Against a
+server that really refused the call, the check raised `AttributeError`, the suite filed it as ERROR,
+"the check itself broke", and the server's own sentence about why it refused never reached the
+report: a real non-conformance read as a defect in the suite. A result now has `text`, the body
+decoded and never raising, and those checks FAIL with the status and the server's words. Reported
+and fixed by @Jiaqiiii523 (#411), with a test that reads the checks and refuses any attribute a
+result does not have; it now also follows an answer that comes back from a helper and one read
+straight off the call, which between them are a third of the answers the checks read.
+
+A report names the suite that produced it. `suite_version` was a second copy of the version and
+had not moved since `2026.9.12.post4`, so every report written by `2026.10.4` through
+`2026.10.4.post8` carried that older name. The version is now written once, in the package, and
+the build reads it from there. No report published under `reports/` was written in that window.
+
+## 2026-10-04 (patched the same day)
+
+Additive to `2026-09-28`: every request and object valid under the previous version is valid here.
+
+**Patch of 2026-10-04, same version.** A record's `content` is an ordered list of parts, always, on
+every read ([Memories §4.3](versions/2026-10-04/memories.md#43-content)). The chapter as first
+published that morning said `content` was text or one file reference, which could not hold a
+picture beside what it shows, or a conversation turn with a file in it. Two kinds of part are
+defined, `text` and `file`; a modality is a media type of a file part, not a kind of part, so a new
+one needs no change here, and any other kind is `x.`-prefixed and carried unchanged. A file part
+may carry the words that stand for it (`text`, with `text_source`), which is what recall by words
+finds; a part may carry the `role` that said it, so a turn is observed in this same shape. A string
+remains shorthand for one text part on a write. A file part's bytes are read at
+`GET /v1/memories/{id}/records/{rid}/content/{index}` (was `/content`). A provider's capability
+document says what it keeps in `content` (`media`, `bytes`, `describes`), replacing the `files`
+flag, and a write of a media type the provider does not keep is refused with `memory_unsupported`,
+never stored without its file. Schema: `MemoryContentPart`; `MemoryRecord.content` is an array.
+Suite `2026.10.4.post1`: ME-02 expects the list, ME-09 exercises parts, order, refusals, and a file
+part kept with its description and read back byte for byte, or refused, as the provider declares.
+No implementation had shipped against the morning's text.
+
+**Second patch of 2026-10-04, same version.** A memory's `id` is opaque. The schema had required
+the `hmem_` prefix, which a server whose memories are a tree it already keeps (its own workspaces,
+its own folders) could meet only with a second id space and a lookup between the two. `hmem_`
+remains the prefix of a server that mints its own ids. Schema: the pattern is gone from `Memory.id`,
+the path parameter and a harness's entry. Suite `2026.10.4.post2`: ME-01 no longer asserts the prefix.
+
+**Third patch of 2026-10-04, same version.** `recall` searches the memory **and everything below it
+the caller may read**; the morning's text had it act on one memory. A search is how a caller finds
+where something is kept, so each result now carries `memory` (`id`, `name`): the place to walk
+from. It never searches an ancestor. `depth` narrows it (`0` is the memory alone; it used to widen,
+from a default of one memory). A server MAY cap the memories one question covers and says so in
+`degraded`. `list`, `get`, `history` and the queries still act on one memory. The provider
+capability `recall.max_depth` is gone: the subtree is the server's to compose. Schema:
+`MemoryRecall.results[].memory` is required. Suite `2026.10.4.post3`: ME-03 rewritten.
+
+**Fourth patch of 2026-10-04, same version.** One vocabulary for who acts on a memory. A grant's
+principal was "an opaque typed identifier" whose kinds each server chose, and a record's
+`written_by` named its kinds only by example (`harness`, `consolidator`); two implementations had
+already stamped a person as `member` and as `user`. Now four kinds serve both places: `member`,
+`harness`, `group` (holds grants, never writes) and `provider` (writes, never holds a grant); a
+server's own kind is `x.`-prefixed. `consolidator` is gone: a consolidation's records are written
+by the `provider`, with `consolidation_id` beside it, and a record derived from an observation
+carries `on_behalf_of`. A credential is not a kind. Schema: `MemoryWriter`, and a pattern on a
+grant's `principal`. Suite `2026.10.4.post4`: ME-02 checks the writer's kind.
+
+**Fifth patch of 2026-10-04, same version.** A person and an agent are the same kind, and access
+has one mechanism. The fourth patch listed `member` (a person) and `harness` (an agent) as two
+kinds; they are one, `member`, and which of the two a member is, is its `type` (`human`, `agent`),
+a property no rule depends on. With that, a harness no longer carries a list of attached memories
+with an `access` that narrowed a grant: an agent reaches what it was granted, on the memory, as a
+person does. `/v1/harnesses/{id}/memories` reads the agent's principal and what it was granted, and
+sets two things: `default_memory_id` and `observe`. An agent joins a group only when someone adds
+it. Kinds are now `member`, `group` and, for a writer only, `provider`. Schema: `HarnessMemories`
+reshaped, `HarnessMemorySettings` added, `HarnessMemoryEntry` removed. Suite `2026.10.4.post5`.
+
+**Sixth patch of 2026-10-04, same version.** One graph. Entities and the relationships between
+them are not a second structure beside records: an entity is a record (new core type `entity`), a
+reference is an edge, and a relationship with something to say is a `fact` that references its
+`subject` and its `object`, so it has a writer, a time, a history and a source like any record.
+Five reference names are defined (`derived_from`, `part_of`, `about`, `subject`, `object`). One
+read, `POST /v1/memories/{id}/graph`, returns records as nodes and references as edges around a
+record or for a memory, the same for every provider; a provider declares where its entities come
+from in `graph.entities` (`derived`, `stated`, `none`). Also: an agent's membership of a group
+follows the rule a person's does (the fifth patch forbade a server to place an agent in a group on
+its own, which is not equal standing where every new person joins one). Schema: `MemoryGraph`,
+`MemoryGraphRequest`, `MemoryRecordRef`. Suite `2026.10.4.post6`: ME-10.
+
+The chapter's opening, §1, the list of an agent's tools (`memory_graph`) and §14 were then brought
+in line with the six patches above; no rule changed.
+
+**Seventh patch of 2026-10-04, same version.** A record MAY carry a `title`: one line that names
+it, apart from what it says (a document's heading, an entity's name, a fact's statement). It is
+optional, at most 300 characters, matched by a search together with the content, and revised like
+any other field. A record with a title MAY have empty content. An `entity`'s name is its title.
+Schema: `MemoryRecord.title`. Suite `2026.10.4.post7`: ME-02 checks that a title reads back apart
+from the content and may stand alone.
+
+The graph read without `around` starts from the records of the memory **and of what is below it**,
+the scope a search has; the sixth patch's text said the memory alone, which returned nothing for a
+memory whose records are all kept in its children.
+
+A record names at most one `subject` and at most one `object`; a second of either is refused with
+`memory_invalid` (422). Stated because two implementations had to agree on it: the reference
+gateway kept such a record and a graph engine refused it.
+
+Two things the first server built from this chapter by another team read differently from the
+reference gateway, both the chapter's fault, both now said once: `supersedes` is the NUMBER of the
+version a version replaced (the example showed a record id, and the schema allowed either); and a
+reference the reader may not follow is `{ record_id, available: false }` with no `memory_id` (the
+chapter returned the memory's id, which tells the reader that the memory exists).
+
+**Records that follow a source (§5.4), found by the second server.** A server that shows a
+document as one record per section cannot let a section be revised or forgotten through the memory:
+the next save of the document would undo it. The chapter had no word for that, so the server's
+refusal was undefined and a kept file was caught by the same refusal. Now: such a record carries
+`follows` (`kind`, `id`, `name` of its source), `revise` and `forget` on it are refused with
+`memory_unsupported` in words that say where the source is changed, and a client offers neither.
+A file someone kept is NOT such a record: its title and its line are its writer's statement, and
+it is revised and forgotten like any other; forgetting it takes the file out of reads, erasing it
+removes the bytes. Schema: `MemoryRecord.follows`, optional.
+
+**What a caller was given (`GET /v1/memories?granted=true`), found by the second server.** The
+listing without `parent` says where a caller enters the tree, and nothing said where below that it
+may do more. A server that ran an agent whose memories another server kept built the agent's tools
+from the entry listing, and an agent that read a memory and wrote one of its children was offered
+no tool to write with. `granted=true` lists every memory the caller may read whose parent it
+cannot see, and every memory below those on which what it may do differs from the parent, with
+its privileges on each. It is stated in what the caller may do, not in how access is kept, so a
+server that lets a member in by a role answers it as one that keeps a grant per memory does. §9
+names it as what an agent's tools are built from. Conformance: ME-01 asks it.
+
+- **Memories** ([Memories](versions/2026-10-04/memories.md)), the Harness Memories sub-protocol,
+  optional at every class behind the `memories` capability. A memory is a named node in a tree:
+  it holds records and may have child memories. A grant gives a principal privileges (`read`,
+  `write`, `create`, `delete`) on a node and the node's descendants inherit it, up to a
+  `restricted` node; what a caller may not read is answered exactly as what does not exist.
+- Records are written two ways (`observe`: raw episodes, the provider decides what to derive, and
+  may answer `202` with a job; `remember`: one record as stated) and removed two ways (`forget`:
+  closed, trace kept; `erase`: content gone, with a list of what could not be reached). A change
+  appends a version; `history`, `as_of` and named snapshots read the past.
+- `recall` acts on one memory, by meaning, words and fields, and answers with the parent and
+  children the caller may read, so an agent walks the tree itself, up or down. What a provider did
+  not do is said in `degraded`; `abstain` says that nothing returned answers the question. Named
+  queries, and free queries where a provider offers them, run in the provider's own language,
+  confined to what the caller may read by a means the statement cannot undo.
+- A server keeps no memory of its own: records are kept by a **provider** the server is connected
+  to, behind one contract, and each provider says what it does in a capability document
+  (`GET /v1/memories/providers`): isolation, derivation, signals, history, erase, queries, types.
+- A harness is attached to memories at `PUT /v1/harnesses/{id}/memories`; attaching is granting.
+  A task names one more in `metadata.memory`. A session reaches memory at four moments: priming,
+  the agent's tools, observation after a turn, and consolidation, whose runs are visible, bounded
+  and reversible.
+- Extension record types carry their own schema and operations, for resources that are more than text.
+- New objects in the schema: `Memory`, `MemoryRecord`, `MemoryRecall`, `MemoryGrant`,
+  `MemoryProvider`, `MemoryConsolidation` and their requests; 23 paths under `/v1/memories` and
+  `/v1/harnesses/{id}/memories`. New error codes: `memory_not_found`, `memory_forbidden`,
+  `memory_record_not_found`, `memories_not_attached`, `memory_invalid`, `memory_unsupported`,
+  `memory_busy`, `memory_unavailable`.
+- Conformance suite `2026.10.4`: ME-01 to ME-08 drive the tree, records, recall and the provider's
+  capability document on a server that reports the capability and has a provider connected; a
+  server without the capability skips them. They pass, 8 of 8, on a build of the reference server
+  with a hosted memory service as the provider. The suite runs with one credential, so isolation
+  between principals is not yet checked by it.
+
 ## 2026-09-28 (patched 2026-09-29)
 
 Additive to `2026-09-12`: every request and object valid under the previous version is valid here.

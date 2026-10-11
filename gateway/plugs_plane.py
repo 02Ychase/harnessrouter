@@ -38,10 +38,15 @@ TEXT_CAP = 200_000             # the most text one tool result carries back to t
 
 # Tests set an httpx transport here so every vendor call is exercised and nothing is spent.
 transport: httpx.BaseTransport | None = None
+# Set by the gateway: a transport whose connections go only to an address it classified in the
+# same step, so a vendor address a member typed cannot reach the private network on a shared
+# deployment, a redirect included (every connection, redirected or not, goes through it).
+checked_transport = None
 
 
 def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=CALL_TIMEOUT_S, transport=transport, follow_redirects=True)
+    t = transport if transport is not None else (checked_transport() if checked_transport else None)
+    return httpx.AsyncClient(timeout=CALL_TIMEOUT_S, transport=t, follow_redirects=True)
 
 
 class PlugToolError(RuntimeError):
@@ -953,7 +958,9 @@ async def _vc_link(c, f, cfg) -> dict:
 
 @_tool("vercel", "deploy_from_repo", "write",
        "Create a deployment from the linked GitHub repository at a ref, then watch it for up to two minutes. "
-       "Returns the deployment's id, state and url; call get_deployment to keep watching a slow build.",
+       "Returns the deployment's id, state, target and url; call get_deployment to keep watching a slow build. "
+       "Vercel makes a project's FIRST deployment a production one whatever is asked; a preview is what "
+       "the same call gives from the second deployment on.",
        _obj({"ref": _s("Branch, tag or commit; the production branch when omitted"),
              "production": _b("Deploy to production rather than as a preview"),
              "repo": _s("owner/name, when the project is not linked yet")}))
@@ -980,7 +987,16 @@ async def _(c, f, cfg, a):
             break
         await asyncio.sleep(DEPLOY_POLL_S)
         d = await _vc(c, f, cfg, "GET", f"/v13/deployments/{did}")
-    return _deploy_out(d)
+    out = _deploy_out(d)
+    if not a.get("production") and str(d.get("target") or "") == "production":
+        # Seen twice on the hosted service, 2026-10-05, the second time on a branch that is not the
+        # production branch: a project with no deployment yet gets a production one, and an agent
+        # that asked for a preview reported its task blocked. The answer says what happened and
+        # what to do.
+        out["note"] = ("A preview was asked for and Vercel made this a production deployment, as it does for a "
+                       "project's first deployment. It is live on the project's production address. Call "
+                       "deploy_from_repo again with the same ref for a preview.")
+    return out
 
 
 @_tool("vercel", "link_repo", "write", "Link the project to a GitHub repository (owner/name).",
@@ -1084,7 +1100,11 @@ async def _(c, f, cfg, a):
 
 @_tool("insforge", "describe_table", "read", "Columns of one table.", _obj({"table": _s("Table name")}, ("table",)))
 async def _(c, f, cfg, a):
-    return await _inf(c, f, cfg, "GET", f"/api/database/tables/{_need(a, 'table')}")
+    # The vendor's route for a table's columns ends in /schema (InsForge's own router: GET
+    # /:tableName/schema; the bare /:tableName is routed for DELETE alone). Without it the backend
+    # answers its not-found page: every call of this tool by a real agent failed, eight of eight on
+    # 2026-10-04, and the mock it was written against had no such path at all, so nothing said so.
+    return await _inf(c, f, cfg, "GET", f"/api/database/tables/{_need(a, 'table')}/schema")
 
 
 @_tool("insforge", "query_rows", "read", "Read rows of a table with optional column selection, filters, order and limit.",

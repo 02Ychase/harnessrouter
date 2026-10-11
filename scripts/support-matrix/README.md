@@ -52,8 +52,11 @@ instance does not serve is skipped and recorded as not offered. Exit 0 when ever
 `plugins/run-matrix.py` proves the plugin path on every base, one base at a time: a harness is
 created with ONE Agent Plugins package (`plugins/fixture/`: a manifest, a skill whose token the
 model must repeat, a stdio MCP server that speaks the protocol by hand) and nothing on its
-direct lists, one real task runs per column (skill, stdio MCP, SSE MCP, streamable-HTTP MCP, the
-remote two against a public probe), and the answer is judged on the probe token alone.
+direct lists, one real task runs per column (skill, stdio MCP, a stdio tool that takes a list of
+free-form objects, SSE MCP, streamable-HTTP MCP, the remote two against a public probe), and the
+answer is judged on the probe token alone. The `rows` column's token comes from the tool itself:
+it answers only when the rows it was handed carry their fields, and names what it received
+otherwise, so an agent's own account of its call is never the judge.
 
     python3 plugins/run-matrix.py --base-url https://your-instance/api/harness --api-key "$KEY" \
         --bases aider --out plugin-results.json
@@ -75,6 +78,25 @@ the harness's Browser section in the agent's instructions file is what the agent
 
 The table (`--md`) is the Browser section of docs/support-matrix.md; the run's findings go to
 docs/support-matrix-notes.md like every other column's.
+
+## The thinking column
+
+`thinking/run-column.py` asks whether a level a turn asks for changes how much the model thinks, on
+every base: one harness per base on a model that has levels, the same task with no level and at
+`none`, `low` and `high`, judged from the turn's own record (`reasoning.applied`) and the provider's
+count of thinking tokens (`usage.output_tokens_details.reasoning_tokens`), with output tokens
+standing in where a provider gives no count. What the agent says about itself is not read.
+
+    python3 thinking/run-column.py --base-url https://<instance>/api/harness --api-key "$KEY" \
+        --out thinking.json                           # every base, its first model with levels
+    python3 thinking/run-column.py ... --bases codex,pi --model gpt-5.4 --repeat 2
+
+`thinking/probe.py` is how the levels in runner/reasoning.py were found: one question at every
+level, and at each provider's own switches, straight at a provider's API, reading its usage. Run it
+again when a model is added; a level goes into the table only where it was seen to be accepted.
+
+    THINKING_PROBE_BASE=https://openrouter.ai/api/v1 THINKING_PROBE_KEY=... \
+        python3 thinking/probe.py chat:openai/gpt-5.4 responses:openai/gpt-5.4 messages:anthropic/claude-haiku-4.5
 
 ## Environments column
 

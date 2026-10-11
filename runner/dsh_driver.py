@@ -18,6 +18,7 @@ credential never enters the dsh process env, its session log, or anything it cou
 """
 from __future__ import annotations
 
+import http.client
 import http.server
 import json
 import re
@@ -25,9 +26,30 @@ import os
 import pathlib
 import sys
 import threading
+import time
 import urllib.request
 
+import reasoning   # how much a model thinks on a turn; the runner's relay applies the same functions
+
 UPSTREAM_BASE = ""   # set in main() from HR_DSH_BASE_URL, then scrubbed from the env
+EFFORT = ""          # the thinking level the turn asked for (HR_DSH_REASONING_EFFORT), "" for none
+EFFORT_ROUTE = ""    # the provider the gateway named for the connection (HR_DSH_REASONING_ROUTE), "" = read the base
+_effort_refused: set = set()   # models whose provider refused the level on this turn
+
+
+def _upstream_wait() -> float:
+    """How long this relay waits on the provider: for the answer to begin, and in a stream for the
+    next EVENT. The runner's own figure (HR_RELAY_UPSTREAM_TIMEOUT_S, handed over by _build_dsh),
+    600 s when it is absent or not a positive number (the runner's default; see
+    _relay_upstream_timeout in server.py for why it is not shorter)."""
+    try:
+        v = float(os.environ.get("HR_RELAY_UPSTREAM_TIMEOUT_S") or 600)
+    except ValueError:
+        return 600.0
+    return v if v > 0 else 600.0
+
+
+UPSTREAM_WAIT_S = _upstream_wait()
 UPSTREAM_KEY = ""
 
 
@@ -297,15 +319,34 @@ class _Relay(http.server.BaseHTTPRequestHandler):
                 _model = ""
             if "gemini" in _model.lower():
                 body = _with_gemini_schemas(body)   # TokenRouter's Gemini channels forward tool schemas to Google's validator as sent
+        # The turn's thinking level, as the runner's relay writes it (runner/reasoning.py): last of
+        # the body's changes, and never what fails the call.
+        plain, effort_model, effort_back = None, "", False
+        if EFFORT and reasoning.shape_of(tail):
+            try:
+                effort_model = str((json.loads(body) or {}).get("model") or "")
+            except (ValueError, AttributeError):
+                effort_model = ""
+            if effort_model not in _effort_refused:
+                leveled, applied = reasoning.apply(body, reasoning.shape_of(tail), UPSTREAM_BASE, EFFORT,
+                                                   route=EFFORT_ROUTE)
+                if applied:
+                    plain, body = body, leveled
         resp = None
         for attempt in (0, 1, 2):
             req = urllib.request.Request(UPSTREAM_BASE.rstrip("/") + tail,
                                          data=body, method="POST", headers=headers)
             try:
-                resp = urllib.request.urlopen(req, timeout=600)
+                resp = urllib.request.urlopen(req, timeout=UPSTREAM_WAIT_S)
+                if effort_back:
+                    _effort_refused.add(effort_model)   # answered without the level: the level was the cause
                 break
             except urllib.error.HTTPError as e:
                 data = e.read()
+                if plain is not None and attempt < 2 and e.code in (400, 422):
+                    body, plain, effort_back = plain, None, True
+                    continue
+                effort_back = False
                 stripped = _drop_reasoning_effort(body)
                 if attempt < 2 and b"reasoning_effort" in data and stripped != body:
                     _strip_reasoning_effort = True
@@ -345,19 +386,50 @@ class _Relay(http.server.BaseHTTPRequestHandler):
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
             buf = b""
+            # The same two rules as the runner's relay (server.py, _forward), for the same reason.
+            # read1 forwards what has arrived: `read(4096)` waits for 4096 bytes or the end of the
+            # stream, so a short event sat here until the block filled. And an EVENT is the measure
+            # of a live provider, not bytes: an aggregator trickles comment lines while its own
+            # upstream says nothing, which keeps the socket from ever timing out, and the turn hung
+            # until its cap with nothing delivered.
+            last_event = time.monotonic()
+            stopped = ""
             while True:
-                chunk = resp.read(4096)
+                try:
+                    chunk = resp.read1(65536)
+                except (http.client.HTTPException, TimeoutError, OSError) as e:
+                    stopped = f"{type(e).__name__}: {e}"[:300]
+                    break
                 if not chunk:
                     break
                 buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
+                    if line.strip() and not line.lstrip().startswith(b":"):
+                        last_event = time.monotonic()
                     if google:
                         for cid, sig in _google_signatures_in_line(line.strip()):
                             _google_sigs[cid] = sig
                     out = (_rewrite_sse_line(line.rstrip(b"\r")) if rewrite else line.rstrip(b"\r")) + b"\n"
                     self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
                 self.wfile.flush()
+                if time.monotonic() - last_event > UPSTREAM_WAIT_S:
+                    stopped = f"no data for {UPSTREAM_WAIT_S:g} s, only keep-alive lines"
+                    break
+            if stopped:
+                # Said in the stream, and the body left unterminated with the connection closed: a
+                # zero chunk here would hand the runtime a complete answer missing its last events.
+                print(f"[dsh relay] upstream stopped mid-answer on {tail}: {stopped}", flush=True)
+                ev = ("data: " + json.dumps({"error": {
+                    "message": f"the provider stopped answering mid-stream: {stopped}",
+                    "type": "upstream_unavailable", "code": "upstream_unavailable"}}) + "\n\n").encode()
+                try:
+                    self.wfile.write(f"{len(ev):x}\r\n".encode() + ev + b"\r\n")
+                    self.wfile.flush()
+                except OSError:
+                    pass
+                self.close_connection = True
+                return
             if buf:
                 out = _rewrite_sse_line(buf) if rewrite else buf
                 self.wfile.write(f"{len(out):x}\r\n".encode() + out + b"\r\n")
@@ -472,10 +544,12 @@ def _compose_patch(home: pathlib.Path, servers: list[dict], llm: dict | None = N
 
 
 def main() -> int:
-    global UPSTREAM_BASE, UPSTREAM_KEY
+    global UPSTREAM_BASE, UPSTREAM_KEY, EFFORT, EFFORT_ROUTE
     job = json.loads(sys.argv[1])
     UPSTREAM_BASE = os.environ.pop("HR_DSH_BASE_URL", "")
     UPSTREAM_KEY = os.environ.pop("HR_DSH_API_KEY", "")
+    EFFORT = os.environ.pop("HR_DSH_REASONING_EFFORT", "")
+    EFFORT_ROUTE = os.environ.pop("HR_DSH_REASONING_ROUTE", "")
     home = pathlib.Path(os.environ.get("HOME") or ".")
     cwd = job.get("cwd") or os.getcwd()
 
