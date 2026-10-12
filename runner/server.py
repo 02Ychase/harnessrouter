@@ -7444,10 +7444,9 @@ def _mimo_npm(auth: Auth, model: str, pr: str) -> str:
     """Which ai-sdk package serves this mimo turn — opencode's choice, with ONE difference.
 
     opencode sends a claude id on an AGGREGATOR through @ai-sdk/anthropic, i.e. the Messages shape.
-    A Messages turn cannot ride the loopback relay (the relay routes by its Bearer placeholder and
-    Anthropic takes the key in x-api-key), and mimo names no served model of its own — so every
-    claude row on an aggregator records NO served_model at all and matrix rule 2 cannot be
-    evaluated on it.
+    When this was measured that turn left the relay, and mimo names no served model of its own, so
+    every claude row on an aggregator recorded NO served_model and matrix rule 2 could not be
+    evaluated on it. (Every keyed mimo turn rides the relay now, the Messages shape included.)
 
     MEASURED WITH A CONTROL on the Vercel column (2026-10-06): mimo's claude-haiku-4.5 pair came
     back `unlabelled=4`, no served model on any of its four turns, while all seven of its other
@@ -7474,18 +7473,18 @@ def _build_mimo(provider: str, auth: Auth, model: str, prompt: str, cwd: str, en
     pr = provider or "openai-api"
     if pr not in MIMO_PROVIDERS:
         raise HTTPException(400, f"unknown mimo provider '{pr}' (one of {sorted(MIMO_PROVIDERS)})")
-    if auth.base_url and auth.api_key and _mimo_npm(auth, model, pr) != "@ai-sdk/anthropic":
-        # The relay, for every reason it carries opencode's OpenAI-shape turns (request-shape
-        # repair, thought-signature replay, and the real key never reaching the workspace). A
-        # Messages-shape turn keeps its direct base: the relay speaks bearer auth and Anthropic
-        # takes the key in x-api-key.
+    npm = _mimo_npm(auth, model, pr)
+    if auth.base_url and auth.api_key:
+        # EVERY keyed turn rides the relay, the Messages shape included, as opencode's do: the relay
+        # reads x-api-key and sends Anthropic the key that way (#352). The real key never reaches
+        # the CLI's environment, where the agent's shell can read it. The package is chosen before
+        # the swap, from the connection's own shape.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     if auth.api_key:
         env[_MIMO_KEY_ENV] = auth.api_key
     qualified = _opencode_config(auth, model, cwd, mcp_servers, skills_dir, tools_disabled, pr,
-                                 backend="mimo", key_env=_MIMO_KEY_ENV,
-                                 npm=_mimo_npm(auth, model, pr))
+                                 backend="mimo", key_env=_MIMO_KEY_ENV, npm=npm)
     env["MIMOCODE_CONFIG"] = os.path.join(cwd, ".harness", "mimo.json")
     cmd = ["mimo", "run", "--format", "json", "--model", qualified,
            # The sandbox is the trust boundary and nobody is attached to answer a prompt — the
@@ -9510,13 +9509,16 @@ def _build_opensquilla(provider: str, auth: Auth, model: str, prompt: str, cwd: 
                                  f"(one of {sorted(OPENSQUILLA_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, f"opensquilla provider '{pr}' needs a base_url (none configured)")
-    # Its `custom_anthropic` provider only for a connection that IS Anthropic — the same reasoning
-    # as jcode's above: a Messages turn leaves the relay, and with it the only tap that can say
-    # which model actually answered.
+    # Its `custom_anthropic` provider only for a connection that IS Anthropic, as jcode's above.
     anthropic = auth.api_format == "anthropic" or (not auth.api_format and pr == "anthropic")
-    if auth.api_key and not anthropic and not auth.api_format:
+    if auth.api_key:
+        # EVERY keyed turn rides the relay, as jcode's: the real key never reaches the CLI's
+        # environment, where the agent's shell can read it, and the relay is the only tap that can
+        # say which model answered. The Messages provider gets the relay's origin, which works
+        # whichever of /v1/messages or /messages it joins on.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
-        auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
+        auth = auth.model_copy(update={"base_url": _relay_origin(relay_base) if anthropic else relay_base,
+                                       "api_key": relay_tok})
     state_dir, transcript, usage_path = _opensquilla_paths(cwd)
     _opensquilla_config(auth, model, state_dir, anthropic, mcp_servers)
     env[_OPENSQUILLA_ANTHROPIC_KEY_ENV if anthropic else _OPENSQUILLA_KEY_ENV] = auth.api_key or ""
@@ -9738,8 +9740,9 @@ def _build_nanobot(provider: str, auth: Auth, model: str, prompt: str, cwd: str,
         raise HTTPException(400, f"unknown nanobot provider '{pr}' (one of {sorted(NANOBOT_PROVIDERS)})")
     if not auth.base_url:
         raise HTTPException(400, f"nanobot provider '{pr}' needs a base_url (none configured)")
-    if auth.api_key and not auth.api_format:
-        # Every turn rides the loopback relay. nanobot's `custom` provider speaks chat/completions
+    if auth.base_url and auth.api_key:
+        # Every keyed turn rides the loopback relay, a custom endpoint included, so the real key
+        # never reaches the driver's environment. nanobot's `custom` provider speaks chat/completions
         # and names only the model it was asked for, so the relay is also the only honest source of
         # the served model: it reads the id off the provider's own answer. The credential therefore
         # has to be reachable in the ENVIRONMENT as well, which it is — _relay_served_model finds
@@ -9888,25 +9891,28 @@ def _build_jcode(provider: str, auth: Auth, model: str, prompt: str, cwd: str, e
     home = pathlib.Path(env.get("HOME") or cwd)
     # The Messages path is taken ONLY for a connection that IS Anthropic (or one a custom
     # integration declared as anthropic-format). Deliberately NOT for a claude id on an aggregator,
-    # which is where pi and opencode send one: a Messages turn cannot ride the loopback relay (the
-    # relay routes by its Bearer placeholder and Anthropic takes the key in x-api-key), and jcode
-    # names only the model it was ASKED for — so every claude row on an aggregator would record no
-    # served model and rule 2 would be unevaluable on it. An aggregator serves a claude id over
+    # which is where pi and opencode send one: jcode names only the model it was ASKED for, and an
+    # aggregator's Messages surface does not always say which model served, so a claude row there
+    # could record no served model and rule 2 would be unevaluable on it. An aggregator serves a claude id over
     # chat/completions perfectly well, so those rows stay on the relay and stay measurable. This is
     # the kilo finding, applied before it could become a column.
     anthropic = auth.api_format == "anthropic" or (not auth.api_format and pr == "anthropic")
-    if auth.api_key and not anthropic and not auth.api_format:
-        # Every OpenAI-shape turn rides the loopback relay, as opencode's and pi's do, and here it
-        # also decides whether rule 2 can be evaluated at all: jcode names only the model it was
-        # ASKED for, so the served model comes from the relay reading the provider's own answer.
+    if auth.api_key:
+        # EVERY keyed turn rides the loopback relay, the Messages path and a custom endpoint
+        # included, as opencode's do. The real key never reaches the CLI's environment, where the
+        # agent's shell can read it; the relay reads the placeholder from a bearer or x-api-key
+        # and sends Anthropic the key the way it takes it (#352). It also decides whether rule 2
+        # can be evaluated at all: jcode names only the model it was ASKED for, so the served
+        # model comes from the relay reading the provider's own answer.
         relay_base, relay_tok = _hermes_relay_route(auth.base_url, auth.api_key)
         auth = auth.model_copy(update={"base_url": relay_base, "api_key": relay_tok})
     base = (auth.base_url or "").rstrip("/")
     if anthropic:
         # jcode's Messages path: ANTHROPIC_BASE_URL overrides the endpoint and ANTHROPIC_AUTH_TOKEN
-        # is sent as a bearer (README). It does NOT go through the relay — the relay speaks bearer
-        # auth while a direct Anthropic key belongs in x-api-key, the same split opencode and pi make.
-        env["ANTHROPIC_BASE_URL"] = base
+        # is sent as a bearer (README). The relay's ORIGIN: whether the client joins /v1/messages
+        # or /messages onto it, the relay strips one /v1 and joins the rest onto the connection's
+        # own base, as for hermes's Anthropic SDK (_relay_origin).
+        env["ANTHROPIC_BASE_URL"] = _relay_origin(base) if auth.api_key else base
         if auth.api_key:
             env["ANTHROPIC_AUTH_TOKEN"] = auth.api_key
         prov = "anthropic-api"

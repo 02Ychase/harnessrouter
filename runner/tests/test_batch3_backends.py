@@ -19,6 +19,8 @@ import pathlib
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from server import (ALL_GAJAE_TOOLS, ALL_JCODE_TOOLS, ALL_NANOBOT_TOOLS,  # noqa: E402
                     Auth, BACKENDS, CHECKPOINT_EXCLUDE, _agent_doc_path, _build_gajae,
@@ -664,7 +666,7 @@ def test_mimo_keeps_an_aggregators_claude_id_on_the_relay_so_rule_2_stays_answer
     # opencode's own choice is deliberately left alone; mimo's differs exactly here
     assert _opencode_npm(a, "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/anthropic"
     assert _mimo_npm(a, "claude-haiku-4.5", "tokenrouter") == "@ai-sdk/openai-compatible"
-    # a connection that IS Anthropic still speaks Messages — that one cannot ride the relay anyway
+    # a connection that IS Anthropic still speaks Messages, through the relay like every keyed turn
     assert _mimo_npm(a, "claude-haiku-4.5", "anthropic") == "@ai-sdk/anthropic"
     # and nothing else moved
     assert _mimo_npm(a, "gpt-5.4", "tokenrouter") == "@ai-sdk/openai"
@@ -989,3 +991,28 @@ def test_a_layer_with_only_some_of_the_variables_passes_only_those():
     ex = json.loads(pathlib.Path(d, ".harness", "nanobot", "config.json").read_text())["tools"]["exec"]
     assert set(ex["allowedEnvKeys"]) == {"HR_ENVIRONMENT", "PROJECT_ROOT"}
     assert ex["pathPrepend"] == "/env/y/.venv/bin"
+
+
+@pytest.mark.parametrize("build", ["_build_mimo", "_build_jcode", "_build_opensquilla", "_build_nanobot"])
+def test_the_provider_key_never_reaches_the_cli_whatever_the_connection_shape(build):
+    """The CLI's environment is the agent's shell's, and its config files ride the workspace
+    checkpoint: the real key belongs in neither, on any connection a base is offered. A direct
+    Anthropic connection and a custom endpoint left the relay on jcode, opensquilla and mimo (and a
+    custom endpoint on nanobot) and handed the CLI the key itself; the relay reads its placeholder
+    from a bearer or x-api-key and sends the provider the key the way it takes it."""
+    import server
+    key = "sk-real-provider-secret-0123456789"
+    shapes = [("openai-api", Auth(api_key=key, base_url=UP)),
+              ("anthropic", Auth(api_key=key, base_url="https://api.anthropic.com/v1")),
+              ("openai-api", Auth(api_key=key, base_url=UP, api_format="openai"))]
+    if build == "_build_mimo":
+        shapes.append(("openai-api", Auth(api_key=key, base_url="https://proxy.example/v1", api_format="anthropic")))
+    for provider, auth in shapes:
+        d, env = _ws(), {}
+        cmd = getattr(server, build)(provider, auth, "claude-haiku-4.5", "hi", d, env)
+        assert key not in json.dumps(env), (build, provider, auth.api_format, "environment")
+        assert key not in json.dumps(cmd or []), (build, provider, auth.api_format, "argv")
+        for f in pathlib.Path(d).rglob("*"):
+            if f.is_file():
+                assert key.encode() not in f.read_bytes(), (build, provider, auth.api_format, str(f))
+        assert any(str(v).startswith("hr-relay-") for v in env.values()), (build, provider, "no relay placeholder")
