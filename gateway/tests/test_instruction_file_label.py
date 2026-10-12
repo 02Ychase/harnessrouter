@@ -25,9 +25,9 @@ UI = pathlib.Path(__file__).resolve().parents[2] / "ui" / "src"
 HARNESS_TS = UI / "lib" / "harness.ts"
 SETTINGS_TSX = UI / "components" / "HarnessSettings.tsx"
 
-# The one base that reads no workspace: its instructions travel in the job, so there is no file to
-# name and the page says so instead of inventing one.
-NO_FILE = {"systemone"}
+# The bases that read no workspace file: systemone's instructions travel in the job, qoder's with the
+# hosted session it drives, so there is no file to name and the page says so instead of inventing one.
+NO_FILE = {"systemone", "qoder"}
 
 
 def _label_map() -> dict:

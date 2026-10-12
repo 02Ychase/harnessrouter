@@ -212,7 +212,7 @@ export NODE_PATH="$TOOLS/lib/node_modules"
 #
 # gajae is NOT among them, and the gateway offers no gajae base either: its CLI cannot run under
 # this product's write-wall. gateway/app.py carries the measurement, above _MODEL_CATALOG["mimo"].
-export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot}"
+export HR_BACKENDS="${HR_BACKENDS:-claude,codex,hermes,pi,dsh,opencode,kilo,qwen,gemini,cline,omp,goose,kimi,minimax,grok,aider,openhands,agentzero,systemone,cheetahclaws,mimo,jcode,opensquilla,nanobot,qoder}"
 
 wanted()   { [[ ",$HR_BACKENDS," == *",$1,"* ]]; }
 # The executable IS the definition of "installed" — an installer that exits 0 without producing
@@ -240,6 +240,10 @@ backend_bin() {
     systemone) echo "$TOOLS/systemone-venv/bin/python" ;;
     cheetahclaws) echo "$TOOLS/cheetahclaws-venv/bin/cheetahclaws-ready" ;;
     agentzero) echo "$TOOLS/agentzero-venv/bin/agentzero-ready" ;;
+    # qoder has NO binary: its runtime is Qoder's cloud, and the turn process is runner/qoder_driver.py
+    # on the runner's own interpreter (stdlib only). Nothing is installed, pinned or verified for it,
+    # and the image's interpreter is what "installed" means here.
+    qoder) echo "$PY" ;;
     mimo)   echo "$TOOLS/bin/mimo" ;;
     gajae)  echo "$TOOLS/bin/gjc" ;;
     jcode)  echo "$TOOLS/bin/jcode" ;;

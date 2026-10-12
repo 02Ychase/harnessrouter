@@ -20,7 +20,7 @@ export interface OobHarness {
   defaultModel?: string;   // the backend default, NOT necessarily models[0]
   moreModels?: number;     // "+N" pill
   status: 'ready' | 'soon';
-  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | null; // gateway backend; null = coming soon
+  backend: 'claude' | 'codex' | 'hermes' | 'pi' | 'dsh' | 'opencode' | 'kilo' | 'qwen' | 'gemini' | 'cline' | 'omp' | 'goose' | 'kimi' | 'minimax' | 'aider' | 'openhands' | 'grok' | 'systemone' | 'cheetahclaws' | 'agentzero' | 'mimo' | 'jcode' | 'opensquilla' | 'nanobot' | 'qoder' | null; // gateway backend; null = coming soon
   systemPrompt: string;    // the harness's built-in system prompt (shown read-only)
   tools: string[];         // built-in tools (read-only)
   skills: string[];        // built-in skills (read-only)
@@ -215,6 +215,13 @@ export const OOB: OobHarness[] = [
     models: ['jev-latest', 'jev-preview', 'jev-1.13', 'laya', 'openthai-systemone', 'system-one-phase2'], defaultModel: 'jev-latest', moreModels: 0,
     systemPrompt: 'You act inside a finite set of actions the environment offers each step. Choose the action that moves the goal forward, finish when the goal is reached, and escalate when nothing offered fits.',
     tools: [], skills: [] },
+  { id: 'qoder', name: 'Qoder Cloud Agent', version: 'Managed API', backend: 'qoder', status: 'ready',
+    // Placeholder only: the gateway's catalog wins once fetched. Qoder's own model ids, as its
+    // GET /models lists them for the tenant; the runtime is Qoder's cloud, not a process on this
+    // box, and Qoder picks and bills the model behind an id.
+    models: ['auto', 'ultimate', 'performance', 'efficient', 'smodel', 'qmodel_38max', 'qfmodel', 'qmodel_latest', 'qmodel', 'kmodel_latest', 'kmodel', 'gmodel', 'gfmodel', 'dmodel', 'dfmodel', 'mmodel'], defaultModel: 'ultimate', moreModels: 0,
+    systemPrompt: 'You are Qoder, an autonomous coding agent running in a cloud sandbox with shell and file access. Read, edit and run what the task needs, and deliver every file the user should receive with DeliverArtifacts.',
+    tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'ImageSearch', 'ImageGen', 'DeliverArtifacts'], skills: [] },
   { id: 'mimo', name: 'MiMo Code', version: 'v0.1.15', backend: 'mimo', status: 'ready',
     // Placeholder only, like every list above: the gateway's catalog wins once fetched. MiMo Code is
     // an opencode fork and reaches what opencode reaches, so the list is opencode's.
@@ -249,12 +256,14 @@ export const oobById = (id: string) => OOB.find((o) => o.id === id) || null;
 // gateway/tests/test_instruction_file_label.py now holds this map to the runner's function, so the
 // next base that chooses its own name cannot drift the same way.
 //
-// systemone is the one base with no file at all: it reads no workspace and its instructions travel
-// in the job, so the page calls the box "Instructions".
+// systemone and qoder have no file at all: systemone reads no workspace and its instructions travel
+// in the job, and qoder's travel with the hosted session it drives, so the page calls the box
+// "Instructions".
 export const INSTRUCTION_FILE: Record<string, string> = {
   qwen: 'QWEN.md',
   gemini: 'GEMINI.md',
   systemone: 'Instructions',
+  qoder: 'Instructions',
 };
 const AGENTS_MD_BASES = [
   'codex', 'hermes', 'omp', 'pi', 'opencode', 'kilo', 'dsh', 'qwen', 'cline', 'goose', 'kimi',
@@ -375,6 +384,10 @@ export interface BaseInfo {
    *  offered actions and reads no documents), so none are offered and none can be added. Absent
    *  on older gateways, which is the same as true. */
   takesSkills?: boolean;
+  /** false means a Task on this base cannot open an environment (Qoder Cloud Agent runs in its own
+   *  cloud, and the layer is mounted on this box only), so none is offered. Absent on older
+   *  gateways, which is the same as true. */
+  takesEnvironments?: boolean;
 }
 
 let _bases: Record<string, BaseInfo> | null = null;
